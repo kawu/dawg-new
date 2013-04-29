@@ -1,0 +1,38 @@
+name:               dawg
+version:            1.0
+synopsis:           Directed acyclic word graphs
+description:
+    The library implements /directed acyclic word graphs/ (DAWGs) internaly
+    represented as /minimal acyclic deterministic finite-state automata/.
+license:            BSD3
+license-file:       LICENSE
+cabal-version:      >= 1.6
+copyright:          Copyright (c) 2012 IPI PAN
+author:             Jakub Waszczuk
+maintainer:         waszczuk.kuba@gmail.com
+stability:          experimental
+category:           Data, Data Structures
+homepage:           https://github.com/kawu/dawg-new
+build-type:         Simple
+
+library
+    hs-source-dirs: src
+    
+    build-depends:
+        base >= 4 && < 5
+      , containers >= 0.4.1 && < 0.6
+      , binary
+      , vector
+      , vector-binary
+      , mtl
+
+    exposed-modules:
+        Data.DAWG.Dynamic.Internal
+
+    other-modules:
+
+    ghc-options: -Wall -O2
+
+source-repository head
+    type: git
+    location: https://github.com/kawu/dawg-new.git
