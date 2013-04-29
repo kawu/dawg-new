@@ -24,10 +24,12 @@ library
       , binary
       , vector
       , vector-binary
-      , mtl
+      -- , mtl
 
     exposed-modules:
-        Data.DAWG.Dynamic.Internal
+        Data.DAWG.Dynamic.Types
+        Data.DAWG.Dynamic.State
+      , Data.DAWG.Dynamic.Internal
 
     other-modules:
 

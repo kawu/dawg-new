@@ -83,200 +83,57 @@
  - ==============
  - 
  - Elementy stanu aplikacji:
+ -
  - * Tablica (wektor) stanów automatu.  Do każdego stanu
  -   przypisane są wartość oraz zbiór krawędzi wychodzących.
- - * 
- -  
+ -   Przez identifykator stanu będziemy rozumieć pozycję
+ -   tego stanu w tablicy stanów automatu. 
+ -
+ - * Tablica asocjacyjna, która pozwala przekształcać stany
+ -   (a dokładniej, ich hasze) na identyfikatory stanów.
+ -   Warto zauważyć, że operację odwrotną mamy w pewnym
+ -   sensie za darmo: znając identyfikator stanu, możemy
+ -   szybko wyszukać odpowiedni stan w tablicy stanów automatu,
+ -   na podstawie którego możemy już obliczeń wartość hasz.
  -}
 
 
-----------------------------------------------------------------------
--- Basic data types
-----------------------------------------------------------------------
+module Data.DAWG.Dynamic.Internal
+(
+) where
 
 
--- | Alphabet symbol (or letter).
-type Sym = Int
+import           Control.Applicative ((<$>))
+import qualified Data.Vector.Mutable as V
+import qualified Data.Vector.Unboxed.Mutable as U
+import qualified Data.Map as M
+import           Data.STRef
+import           Control.Monad.ST
 
-
--- | A value kept in automata nodes.
-type Val = Int
-
-
-----------------------------------------------------------------------
--- Application state
-----------------------------------------------------------------------
-
-
-
--- | A minimal, acyclic, finite-state automaton monad.
-data DFA = DFA
-
-
--- | A monad instance of DFA.
-instance Monad DFA where
-
-
-{- 
- - Main elements of DFA state:
- -
- - * For each state, a number of ingoing paths.
- -
- - * A correspondence between states and state identifiers.
- -
- - * The higher-level interface should relate to state
- -   identifiers, not state themselves (to which a
- -   lower-level interface may be prepared).
- - 
- - * Hash table is always updated explicitely in the code.
- -   No lower- or even medium-level functions can update
- -   the hashtable implicitely.
- -
- - * Apparently it is possible to avoid some of the clone
- -   operations in the insert implementation.  Try it.
- -}
-
-
--- | Insert a (word, value) pair into the automaton.
--- Return ID of the new branch.
-insert :: [Sym] -> Val -> StateID -> DFA StateID
-insert (x:xs) y i0 = do
-
-    -- Clone the state if it is confluent
-    i <- confluent i0 >>= \b -> if b
-        then clone i0
-        else i0
-
-    -- { Cloned state is not in the hash table }
-
-    -- Determine ID of a branch below
-    -- TODO: You should check if the insert subcall changed the state ID.
-    j <- follow i x >>= \mj -> case mj of
-        Nothing -> branch xs y
-        Just j' -> insert xs y j'
-
-    -- Change the outgoing transition
-    -- Q: Should the change be immediately visible
-    -- in the automaton?  In which parts?
-    setTrans i x j
-
-    -- Lookup identical state with a different ID and
-    -- merge both states
-    lookupDup i >>= \case _dp of
-        Nothing -> return i
-        Just dp -> merge i j
-    
-
--- | Retrieve state ID by following a symbol from a source state ID.
-follow :: StateID -> Sym -> DFA (Maybe StateID)
-follow = undefined
-
-
--- | Make new branch.
-branch :: [Sym] -> Val -> DFA StateID
-branch = undefined
-
-
--- | Is it a counfluent state?  We can check a number of
--- ingoing paths to determine this.
-confluent :: StateID -> DFA Bool
-confluent = undefined
-
-
--- | Set the outgoing transition.
-setTrans :: StateID -> Sym -> StateID -> DFA ()
-setTrans = undefined
-
-
--- | Lookup identical state (from the same equivalence class)
--- with a different ID.
---
---
--- Suppose we have a hashtable of (state hash -> stateID) type.
--- We want to find a duplicate state.  What do we do?
---
--- First we identify the hash of the given state.  Then we
--- lookup the hash in the hashtable.  What do we find?
---
--- Well, if the given state ID has been updated in the
--- hashtable, at least two stateIDs should be found.
--- In this case, we can filter out the ID given as
--- argument.  Otherwise, it the hastable has not been
--- updated, we don't have to do that, no problem.
---
-lookupDup :: StateID -> DFA (Maybe StateID)
-lookupDup = undefined
-
-
---------------------------------------
--- Test no. 2
---------------------------------------
+import           Data.DAWG.Dynamic.Types
+import           Data.DAWG.Dynamic.State (State)
+import qualified Data.DAWG.Dynamic.State as N
 
 
 ----------------------------------------------------------------------
--- Medium-level interface
+-- DFA state monad
 ----------------------------------------------------------------------
 
 
-
--- | Insert a (word, value) pair within a context of
--- a confluent state.
--- TODO: Handle empty word case.
-insertConfl :: [Sym] -> Val -> StateID -> DFA StateID
-insertConfl (x:xs) y i0 = do
-
-    -- Store target of the current x-transition.
-    j0 <- getTrans i0 x
-
-    -- Determine root state ID of a branch below.
-    j1 <- Just <$> case j0 of
-        -- A child of a confluent state is also a confluent state.
-        Just j  -> insertConfl xs y j
-        Nothing -> branch xs y
-    -- TODO: Stop computation when (j0 == j1)?
-
-    -- Add the outgoing transition.  The current state is changed.
-    -- Hash of the state is also changed here and now.
-    setTrans i0 x j1
-
-    -- Lookup identical state.
-    i1 <- lookup i0 >>= case of
-        Just i  -> return i
-        Nothing -> copy i0
-
-    -- Restore the current state to its original form.
-    setTrans i0 x j0
-
-    -- Return the resultant state.
-    return i1
+-- | A state of DFA application.
+data DFA_State s = DFA_State {
+    -- | A vector of DFA states.  A position of a state
+    -- in the vector represents its `StateID`.
+      stateTab  :: V.MVector s State
+    -- | A vector of free state slots.
+    , freeTab   :: U.MVector s Bool
+    -- | A hash table which is used to translate states
+    -- to their corresponding identifiers.
+    , stateMap  :: M.Map State StateID }
 
 
--- | Insert a (word, value) pair within a context of
--- a non-confluent state.
-insertNonConfl :: [Sym] -> Val -> StateID -> DFA StateID
-insertNonConfl (x:xs) y i0 = do
-
-    -- Store target of the current x-transition.
-    j0 <- getTrans i0 x
-
-    -- Determine root state ID of a branch below.
-    j1 <- case j0 of
-        Just j  -> insert xs y j
-        Nothing -> branch xs y
-    -- TODO: Stop computation when (j0 == j1)?
-
-    -- Add the outgoing transition.  The current state is changed.
-    -- Hash of the state is also changed here and now.
-    setTrans i0 x j1
-
-    -- Lookup identical state.
-    lookup i0 >>= case of
-        Nothing -> return i0
-        Just i  -> do
-            -- TODO: Should we restore the (x -> j0)
-            -- transition before deletion?
-            delete i0
-            return i
+-- | A DFA reference.
+type DFA s = STRef s (DFA_State s)
 
 
 ----------------------------------------------------------------------
@@ -289,22 +146,164 @@ insertNonConfl (x:xs) y i0 = do
 
 -- | Get the outgoing transition.  Return `Nothin` if there is
 -- no transition on a given symbol.
-getTrans :: StateID -> Sym -> DFA (Maybe StateID)
-getTrans = undefined
+getTrans :: StateID -> Sym -> DFA s -> ST s (Maybe StateID)
+getTrans i x dfa = do
+    us <- stateTab <$> readSTRef dfa
+    u  <- V.read us i
+    return $ N.getTrans x u
 
 
 -- | Set the outgoing transition.  Use `Nothing` to delete
 -- the transition.
-setTrans :: StateID -> Sym -> Maybe StateID -> DFA ()
-setTrans = undefined
+setTrans :: StateID -> Sym -> Maybe StateID -> DFA s -> ST s ()
+setTrans i x j dfa = do
+    us <- stateTab <$> readSTRef dfa
+    u <- V.read us i
+    V.write us i (N.setTrans x j u)
 
 
 ----------------------------------------------------------------------
--- Register operations
+-- And then...
 ----------------------------------------------------------------------
 
 
-data Register
-
-
-addToReg :: 
+-- -- | Insert a (word, value) pair into the automaton.
+-- -- Return ID of the new branch.
+-- insert :: [Sym] -> Val -> StateID -> DFA StateID
+-- insert (x:xs) y i0 = do
+-- 
+--     -- Clone the state if it is confluent
+--     i <- confluent i0 >>= \b -> if b
+--         then clone i0
+--         else i0
+-- 
+--     -- { Cloned state is not in the hash table }
+-- 
+--     -- Determine ID of a branch below
+--     -- TODO: You should check if the insert subcall changed the state ID.
+--     j <- follow i x >>= \mj -> case mj of
+--         Nothing -> branch xs y
+--         Just j' -> insert xs y j'
+-- 
+--     -- Change the outgoing transition
+--     -- Q: Should the change be immediately visible
+--     -- in the automaton?  In which parts?
+--     setTrans i x j
+-- 
+--     -- Lookup identical state with a different ID and
+--     -- merge both states
+--     lookupDup i >>= \case _dp of
+--         Nothing -> return i
+--         Just dp -> merge i j
+--     
+-- 
+-- -- | Retrieve state ID by following a symbol from a source state ID.
+-- follow :: StateID -> Sym -> DFA (Maybe StateID)
+-- follow = undefined
+-- 
+-- 
+-- -- | Make new branch.
+-- branch :: [Sym] -> Val -> DFA StateID
+-- branch = undefined
+-- 
+-- 
+-- -- | Is it a counfluent state?  We can check a number of
+-- -- ingoing paths to determine this.
+-- confluent :: StateID -> DFA Bool
+-- confluent = undefined
+-- 
+-- 
+-- -- | Set the outgoing transition.
+-- setTrans :: StateID -> Sym -> StateID -> DFA ()
+-- setTrans = undefined
+-- 
+-- 
+-- -- | Lookup identical state (from the same equivalence class)
+-- -- with a different ID.
+-- --
+-- --
+-- -- Suppose we have a hashtable of (state hash -> stateID) type.
+-- -- We want to find a duplicate state.  What do we do?
+-- --
+-- -- First we identify the hash of the given state.  Then we
+-- -- lookup the hash in the hashtable.  What do we find?
+-- --
+-- -- Well, if the given state ID has been updated in the
+-- -- hashtable, at least two stateIDs should be found.
+-- -- In this case, we can filter out the ID given as
+-- -- argument.  Otherwise, it the hastable has not been
+-- -- updated, we don't have to do that, no problem.
+-- --
+-- lookupDup :: StateID -> DFA (Maybe StateID)
+-- lookupDup = undefined
+-- 
+-- 
+-- --------------------------------------
+-- -- Test no. 2
+-- --------------------------------------
+-- 
+-- 
+-- ----------------------------------------------------------------------
+-- -- Medium-level interface
+-- ----------------------------------------------------------------------
+-- 
+-- 
+-- 
+-- -- | Insert a (word, value) pair within a context of
+-- -- a confluent state.
+-- -- TODO: Handle empty word case.
+-- insertConfl :: [Sym] -> Val -> StateID -> DFA StateID
+-- insertConfl (x:xs) y i0 = do
+-- 
+--     -- Store target of the current x-transition.
+--     j0 <- getTrans i0 x
+-- 
+--     -- Determine root state ID of a branch below.
+--     j1 <- Just <$> case j0 of
+--         -- A child of a confluent state is also a confluent state.
+--         Just j  -> insertConfl xs y j
+--         Nothing -> branch xs y
+--     -- TODO: Stop computation when (j0 == j1)?
+-- 
+--     -- Add the outgoing transition.  The current state is changed.
+--     -- Hash of the state is also changed here and now.
+--     setTrans i0 x j1
+-- 
+--     -- Lookup identical state.
+--     i1 <- lookup i0 >>= case of
+--         Just i  -> return i
+--         Nothing -> copy i0
+-- 
+--     -- Restore the current state to its original form.
+--     setTrans i0 x j0
+-- 
+--     -- Return the resultant state.
+--     return i1
+-- 
+-- 
+-- -- | Insert a (word, value) pair within a context of
+-- -- a non-confluent state.
+-- insertNonConfl :: [Sym] -> Val -> StateID -> DFA StateID
+-- insertNonConfl (x:xs) y i0 = do
+-- 
+--     -- Store target of the current x-transition.
+--     j0 <- getTrans i0 x
+-- 
+--     -- Determine root state ID of a branch below.
+--     j1 <- case j0 of
+--         Just j  -> insert xs y j
+--         Nothing -> branch xs y
+--     -- TODO: Stop computation when (j0 == j1)?
+-- 
+--     -- Add the outgoing transition.  The current state is changed.
+--     -- Hash of the state is also changed here and now.
+--     setTrans i0 x j1
+-- 
+--     -- Lookup identical state.
+--     lookup i0 >>= case of
+--         Nothing -> return i0
+--         Just i  -> do
+--             -- TODO: Should we restore the (x -> j0)
+--             -- transition before deletion?
+--             delete i0
+--             return i
