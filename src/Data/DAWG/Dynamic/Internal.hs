@@ -296,8 +296,9 @@ copy dfa i = do
 ----------------------------------------------------------------------
 
 
--- TODO: The functions below will probably crash when the element
--- beeing inserted is already element of the DFA.
+-- TODO: The functions below will probably "crash" when the element
+-- beeing inserted is already element of the DFA.  Or if we change
+-- value of existing state.  Check it.
 
 
 -- | Insert a (word, value) pair within a context of a state.
@@ -311,7 +312,7 @@ insert dfa xs y i = do
 
 
 -- | Insert a (word, value) pair within a context of a confluent state.
--- TODO: Cur off computation when (j0 == j1).
+-- TODO: Cut off computation when (j0 == j1).
 insertConfl :: DFA s -> [Sym] -> Val -> StateID -> ST s StateID
 
 -- CASE: Non-empty path.
@@ -340,7 +341,7 @@ insertConfl dfa [] y1 i0 = do
 
 
 -- | Insert a (word, value) pair within a context of a non-confluent state.
--- TODO: Stop computation when (j0 == j1)?
+-- TODO: Cut off computation when (j0 == j1)?
 insertNonConfl :: DFA s -> [Sym] -> Val -> StateID -> ST s StateID
 
 -- CASE: Non-empty path.
@@ -379,79 +380,3 @@ insertRoot dfa (x:xs) y i = do
         Just j  -> insert dfa xs y j
         Nothing -> branch dfa xs y
     setTrans dfa i x j1
-
-
-----------------------------------------------------------------------
--- OLD VERSION
-----------------------------------------------------------------------
---
---
--- -- | Insert a (word, value) pair into the automaton.
--- -- Return ID of the new branch.
--- insert :: [Sym] -> Val -> StateID -> DFA StateID
--- insert (x:xs) y i0 = do
--- 
---     -- Clone the state if it is confluent
---     i <- confluent i0 >>= \b -> if b
---         then clone i0
---         else i0
--- 
---     -- { Cloned state is not in the hash table }
--- 
---     -- Determine ID of a branch below
---     -- TODO: You should check if the insert subcall changed the state ID.
---     j <- follow i x >>= \mj -> case mj of
---         Nothing -> branch xs y
---         Just j' -> insert xs y j'
--- 
---     -- Change the outgoing transition
---     -- Q: Should the change be immediately visible
---     -- in the automaton?  In which parts?
---     setTrans i x j
--- 
---     -- Lookup identical state with a different ID and
---     -- merge both states
---     lookupDup i >>= \case _dp of
---         Nothing -> return i
---         Just dp -> merge i j
---     
--- 
--- -- | Retrieve state ID by following a symbol from a source state ID.
--- follow :: StateID -> Sym -> DFA (Maybe StateID)
--- follow = undefined
--- 
--- 
--- -- | Make new branch.
--- branch :: [Sym] -> Val -> DFA StateID
--- branch = undefined
--- 
--- 
--- -- | Is it a counfluent state?  We can check a number of
--- -- ingoing paths to determine this.
--- confluent :: StateID -> DFA Bool
--- confluent = undefined
--- 
--- 
--- -- | Set the outgoing transition.
--- setTrans :: StateID -> Sym -> StateID -> DFA ()
--- setTrans = undefined
--- 
--- 
--- -- | Lookup identical state (from the same equivalence class)
--- -- with a different ID.
--- --
--- --
--- -- Suppose we have a hashtable of (state hash -> stateID) type.
--- -- We want to find a duplicate state.  What do we do?
--- --
--- -- First we identify the hash of the given state.  Then we
--- -- lookup the hash in the hashtable.  What do we find?
--- --
--- -- Well, if the given state ID has been updated in the
--- -- hashtable, at least two stateIDs should be found.
--- -- In this case, we can filter out the ID given as
--- -- argument.  Otherwise, it the hastable has not been
--- -- updated, we don't have to do that, no problem.
--- --
--- lookupDup :: StateID -> DFA (Maybe StateID)
--- lookupDup = undefined
