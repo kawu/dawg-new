@@ -147,7 +147,7 @@ data DFA_State s = DFA_State {
     -- | A number of ingoing paths (size of the left language)
     -- for each state in the automaton.
     , ingoVect  :: U.MVector s Int32
-    -- | A vector of free state slots.
+    -- | A stack of free state slots.
     , freeStack :: P.Stack s StateID
     -- | A hash table which is used to translate states
     -- to their corresponding identifiers.
@@ -160,12 +160,6 @@ type DFA s = STRef s (DFA_State s)
 
 ----------------------------------------------------------------------
 -- Low-level operations
---
---   * Consistency on the level of ingoing path numbers: yes
---     (with the exception of the functions starting with @_@).
---
---   * Consistency on the level of hash table: no
---
 ----------------------------------------------------------------------
 
 
@@ -270,16 +264,21 @@ lookupID :: DFA s -> StateID -> ST s (Maybe StateID)
 lookupID dfa i = getState dfa i >>= lookup dfa
 
 
--- | Add new state into the automaton.  The function doesn't
--- check, if the state is already a member of the automaton.
+-- | Add new state into the automaton.  The function assumes,
+-- that the state is not a member of the automaton.
 _add :: DFA s -> State -> ST s StateID
 _add dfa u = do
-    free <- freeStack <$> readSTRef dfa
-    P.pop free >>= \case
-        Just i  -> i <$ setState dfa i u
+    dfaState@DFA_State{..} <- readSTRef dfa
+    i <- P.pop freeStack >>= \case
+        Just i  -> return i
         Nothing -> do
             grow dfa
-            fromJust <$> P.pop free
+            fromJust <$> P.pop freeStack
+    setState dfa i u
+    setIngo  dfa i 1
+    let stateMap' = M.insert u i stateMap
+    writeSTRef dfa $ dfaState { stateMap = stateMap' }
+    return i
 
 
 -- | Add new state into the automaton.  First check, if it
@@ -298,9 +297,10 @@ add dfa u = lookup dfa u >>= \case
 -- | Remove state from the automaton.
 remove :: DFA s -> StateID -> ST s ()
 remove dfa i = do
-    DFA_State{..} <- readSTRef dfa
+    dfaState@DFA_State{..} <- readSTRef dfa
     P.push i freeStack
-    -- TODO: Update stateMap
+    stateMap' <- flip M.delete stateMap <$> getState dfa i
+    writeSTRef dfa $ dfaState { stateMap = stateMap' }
 
 
 -- | Create a new branch in a DFA.
