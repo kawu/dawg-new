@@ -1,4 +1,6 @@
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE RecordWildCards #-}
+
 
 {-
  - Dodanie nowego słowa do słownika:
@@ -103,7 +105,10 @@ module Data.DAWG.Dynamic.Internal
 ) where
 
 
-import           Control.Applicative ((<$>))
+import           Prelude hiding (lookup)
+import           Control.Applicative ((<$>), (<$))
+import           Control.Monad (forM_)
+import           Data.Maybe (fromJust)
 import qualified Data.Vector.Mutable as V
 import qualified Data.Vector.Unboxed.Mutable as U
 import qualified Data.Map as M
@@ -113,6 +118,7 @@ import           Control.Monad.ST
 import           Data.DAWG.Dynamic.Types
 import           Data.DAWG.Dynamic.State (State)
 import qualified Data.DAWG.Dynamic.State as N
+import qualified Data.DAWG.Dynamic.Stack as P
 
 
 ----------------------------------------------------------------------
@@ -126,7 +132,7 @@ data DFA_State s = DFA_State {
     -- in the vector represents its `StateID`.
       stateTab  :: V.MVector s State
     -- | A vector of free state slots.
-    , freeTab   :: U.MVector s Bool
+    , freeTab   :: P.Stack s StateID
     -- | A hash table which is used to translate states
     -- to their corresponding identifiers.
     , stateMap  :: M.Map State StateID }
@@ -139,34 +145,169 @@ type DFA s = STRef s (DFA_State s)
 ----------------------------------------------------------------------
 -- Primitive operations
 --
--- These operations *don't* guarantee consistency between the set of
+-- These operations *do not* guarantee consistency between the set of
 -- registered states and the hash table used for quick lookup.
 ----------------------------------------------------------------------
 
 
+-- | Retrieve state with a given identifier.
+getS :: DFA s -> StateID -> ST s State
+getS dfa i = do
+    us <- stateTab <$> readSTRef dfa
+    V.read us i
+
+
+-- | Set state with a given identifier.
+setS :: DFA s -> StateID -> State -> ST s ()
+setS dfa i u = do
+    us <- stateTab <$> readSTRef dfa
+    V.write us i u
+
+
+-- | Grow DFA with new, empty states.
+grow :: DFA s -> ST s ()
+grow dfa = do
+    dfaState@DFA_State{..} <- readSTRef dfa
+    let n = V.length stateTab
+
+    -- Use n+1 to handle empty dfa.
+    stateTab' <- V.grow stateTab (n + 1)
+    writeSTRef dfa $ dfaState { stateTab = stateTab' }
+
+    forM_ [n .. 2*n] $ \i -> do
+        setS dfa i N.empty
+        P.push i freeTab
+
+
 -- | Get the outgoing transition.  Return `Nothin` if there is
 -- no transition on a given symbol.
-getTrans :: StateID -> Sym -> DFA s -> ST s (Maybe StateID)
-getTrans i x dfa = do
-    us <- stateTab <$> readSTRef dfa
-    u  <- V.read us i
-    return $ N.getTrans x u
+getTrans :: DFA s -> StateID -> Sym -> ST s (Maybe StateID)
+getTrans dfa i x = N.getTrans x <$> getS dfa i
 
 
 -- | Set the outgoing transition.  Use `Nothing` to delete
 -- the transition.
-setTrans :: StateID -> Sym -> Maybe StateID -> DFA s -> ST s ()
-setTrans i x j dfa = do
-    us <- stateTab <$> readSTRef dfa
-    u <- V.read us i
-    V.write us i (N.setTrans x j u)
+setTrans :: DFA s -> StateID -> Sym -> Maybe StateID -> ST s ()
+setTrans dfa i x j = do
+--     us <- stateTab <$> readSTRef dfa
+--     u  <- V.read us i
+--     V.write us i (N.setTrans x j u)
+    u <- getS dfa i
+    setS dfa i $ N.setTrans x j u
+
+
+-- | Lookup state identifier in a DFA.
+lookup :: DFA s -> State -> ST s (Maybe StateID)
+lookup dfa u = M.lookup u . stateMap <$> readSTRef dfa
+
+
+-- | Same as `lookup`, but looks for a state equivalent to a state residing
+-- under a given identifier.  Intuitively, it should be the same state ID
+-- as the one supplied as argument.  However, if the state is not yet
+-- registered in the hash table `stateMap`, the function will return
+-- another equivalent state in the automaton, if present, and this is
+-- the functionality we use in other, higher-level functions.
+lookupID :: DFA s -> StateID -> ST s (Maybe StateID)
+lookupID dfa i = getS dfa i >>= lookup dfa
+
+
+-- | Add new state into the automaton.  The function doesn't
+-- check, if the state is already a member of the automaton.
+addState_ :: DFA s -> State -> ST s StateID
+addState_ dfa u = do
+    free <- freeTab <$> readSTRef dfa
+    P.pop free >>= \case
+        Just i  -> i <$ setS dfa i u
+        Nothing -> do
+            grow dfa
+            fromJust <$> P.pop free
+
+
+-- | Add new state into the automaton.  First check, if it
+-- is not already a member of the automaton.
+addState :: DFA s -> State -> ST s StateID
+addState dfa u = lookup dfa u >>= \case
+    Nothing -> addState_ dfa u
+    Just i  -> return i
+
+
+-- | Create a new branch in a DFA.
+branch :: DFA s -> [Sym] -> Val -> ST s StateID
+branch dfa (x:xs) y = do
+    j <- branch dfa xs y
+    addState dfa $ N.state Nothing [(x, j)]
 
 
 ----------------------------------------------------------------------
--- And then...
+-- Medium-level interface
 ----------------------------------------------------------------------
 
 
+-- -- | Insert a (word, value) pair within a context of
+-- -- a confluent state.
+-- -- TODO: Handle empty word case.
+-- insertConfl :: [Sym] -> Val -> StateID -> DFA s -> ST s StateID
+-- insertConfl (x:xs) y i0 dfa = do
+-- 
+--     -- Store target of the current x-transition.
+--     j0 <- getTrans dfa i0 x
+-- 
+--     -- Determine root state ID of a branch below.
+--     j1 <- Just <$> case j0 of
+--         -- A child of a confluent state is also a confluent state.
+--         Just j  -> insertConfl dfa xs y j
+--         Nothing -> branch dfa xs y
+--     -- TODO: Stop computation when (j0 == j1)?
+-- 
+--     -- Add the outgoing transition.  The current state is changed.
+--     -- Hash of the state is also changed here and now.
+--     setTrans dfa i0 x j1
+-- 
+--     -- Lookup identical state.
+--     i1 <- lookup dfa i0 >>= case of
+--         Just i  -> return i
+--         Nothing -> copy dfa i0
+-- 
+--     -- Restore the current state to its original form.
+--     setTrans dfa i0 x j0
+-- 
+--     -- Return the resultant state.
+--     return i1
+
+
+-- -- | Insert a (word, value) pair within a context of
+-- -- a non-confluent state.
+-- insertNonConfl :: [Sym] -> Val -> StateID -> DFA StateID
+-- insertNonConfl (x:xs) y i0 = do
+-- 
+--     -- Store target of the current x-transition.
+--     j0 <- getTrans i0 x
+-- 
+--     -- Determine root state ID of a branch below.
+--     j1 <- case j0 of
+--         Just j  -> insert xs y j
+--         Nothing -> branch xs y
+--     -- TODO: Stop computation when (j0 == j1)?
+-- 
+--     -- Add the outgoing transition.  The current state is changed.
+--     -- Hash of the state is also changed here and now.
+--     setTrans i0 x j1
+-- 
+--     -- Lookup identical state.
+--     lookup i0 >>= case of
+--         Nothing -> return i0
+--         Just i  -> do
+--             -- TODO: Should we restore the (x -> j0)
+--             -- transition before deletion?
+--             delete i0
+--             return i
+--
+--
+----------------------------------------------------------------------
+-- OLD VERSION
+----------------------------------------------------------------------
+--
+--
 -- -- | Insert a (word, value) pair into the automaton.
 -- -- Return ID of the new branch.
 -- insert :: [Sym] -> Val -> StateID -> DFA StateID
@@ -236,74 +377,3 @@ setTrans i x j dfa = do
 -- --
 -- lookupDup :: StateID -> DFA (Maybe StateID)
 -- lookupDup = undefined
--- 
--- 
--- --------------------------------------
--- -- Test no. 2
--- --------------------------------------
--- 
--- 
--- ----------------------------------------------------------------------
--- -- Medium-level interface
--- ----------------------------------------------------------------------
--- 
--- 
--- 
--- -- | Insert a (word, value) pair within a context of
--- -- a confluent state.
--- -- TODO: Handle empty word case.
--- insertConfl :: [Sym] -> Val -> StateID -> DFA StateID
--- insertConfl (x:xs) y i0 = do
--- 
---     -- Store target of the current x-transition.
---     j0 <- getTrans i0 x
--- 
---     -- Determine root state ID of a branch below.
---     j1 <- Just <$> case j0 of
---         -- A child of a confluent state is also a confluent state.
---         Just j  -> insertConfl xs y j
---         Nothing -> branch xs y
---     -- TODO: Stop computation when (j0 == j1)?
--- 
---     -- Add the outgoing transition.  The current state is changed.
---     -- Hash of the state is also changed here and now.
---     setTrans i0 x j1
--- 
---     -- Lookup identical state.
---     i1 <- lookup i0 >>= case of
---         Just i  -> return i
---         Nothing -> copy i0
--- 
---     -- Restore the current state to its original form.
---     setTrans i0 x j0
--- 
---     -- Return the resultant state.
---     return i1
--- 
--- 
--- -- | Insert a (word, value) pair within a context of
--- -- a non-confluent state.
--- insertNonConfl :: [Sym] -> Val -> StateID -> DFA StateID
--- insertNonConfl (x:xs) y i0 = do
--- 
---     -- Store target of the current x-transition.
---     j0 <- getTrans i0 x
--- 
---     -- Determine root state ID of a branch below.
---     j1 <- case j0 of
---         Just j  -> insert xs y j
---         Nothing -> branch xs y
---     -- TODO: Stop computation when (j0 == j1)?
--- 
---     -- Add the outgoing transition.  The current state is changed.
---     -- Hash of the state is also changed here and now.
---     setTrans i0 x j1
--- 
---     -- Lookup identical state.
---     lookup i0 >>= case of
---         Nothing -> return i0
---         Just i  -> do
---             -- TODO: Should we restore the (x -> j0)
---             -- transition before deletion?
---             delete i0
---             return i

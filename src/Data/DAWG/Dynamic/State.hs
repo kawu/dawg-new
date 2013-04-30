@@ -7,7 +7,8 @@
 module Data.DAWG.Dynamic.State
 ( State
 , empty
-, valueS
+, vstate
+, state
 , getTrans
 , setTrans
 , incIngo
@@ -38,8 +39,14 @@ empty = State Nothing 0 M.empty
 
 
 -- | A state with initial value.
-valueS :: Val -> State
-valueS x = State (Just x) 0 M.empty
+vstate :: Val -> State
+vstate x = State (Just x) 0 M.empty
+
+
+-- | A generic state construction method.
+-- TODO: One ingoing edge?
+state :: Maybe Val -> [(Sym, StateID)] -> State
+state x = State x 1 . M.fromList
 
 
 -- | Get the outgoing transition on a given symbol or `Nothing`.

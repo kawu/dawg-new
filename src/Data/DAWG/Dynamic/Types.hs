@@ -16,7 +16,8 @@ type Sym = Int
 type Val = Int
 
 
--- | A state identifier.
+-- | A state identifier.  TODO: In some places
+-- we should use smaller types (e.g. Int32).
 type StateID = Int
 
 
