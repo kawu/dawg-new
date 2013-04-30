@@ -120,8 +120,10 @@ module Data.DAWG.Dynamic.Internal
 import           Prelude hiding (lookup)
 import           Control.Applicative ((<$>), (<$))
 import           Control.Monad (forM_)
+import           Data.Int (Int32)
 import           Data.Maybe (fromJust)
 import qualified Data.Vector.Mutable as V
+import qualified Data.Vector.Unboxed.Mutable as U
 import qualified Data.Map as M
 import           Data.STRef
 import           Control.Monad.ST
@@ -141,7 +143,10 @@ import qualified Data.DAWG.Dynamic.Stack as P
 data DFA_State s = DFA_State {
     -- | A vector of DFA states.  A position of a state
     -- in the vector represents its `StateID`.
-      stateTab  :: V.MVector s State
+      stateVect :: V.MVector s State
+    -- | A number of ingoing paths (size of the left language)
+    -- for each state in the automaton.
+    , ingoVect  :: U.MVector s Int32
     -- | A vector of free state slots.
     , freeStack :: P.Stack s StateID
     -- | A hash table which is used to translate states
@@ -168,62 +173,86 @@ type DFA s = STRef s (DFA_State s)
 grow :: DFA s -> ST s ()
 grow dfa = do
     dfaState@DFA_State{..} <- readSTRef dfa
-    let n = V.length stateTab
+    let n = V.length stateVect
 
     -- Use n+1 to handle empty dfa.
-    stateTab' <- V.grow stateTab (n + 1)
-    writeSTRef dfa $ dfaState { stateTab = stateTab' }
+    stateVect' <- V.grow stateVect (n + 1)
+    ingoVect'  <- U.grow ingoVect  (n + 1)
+    writeSTRef dfa $ dfaState
+        { stateVect = stateVect'
+        , ingoVect  = ingoVect' }
 
     forM_ [n .. 2*n] $ \i -> do
-        setS dfa i N.empty
         P.push i freeStack
+        -- TODO: Check, if it is not slower when
+        -- using uninitialized values.
+        -- setState dfa i N.empty
+        -- setI dfa i 0
 
 
 -- | Retrieve state with a given identifier.
-getS :: DFA s -> StateID -> ST s State
-getS dfa i = do
-    us <- stateTab <$> readSTRef dfa
+getState :: DFA s -> StateID -> ST s State
+getState dfa i = do
+    us <- stateVect <$> readSTRef dfa
     V.read us i
 
 
 -- | Set state with a given identifier.
-setS :: DFA s -> StateID -> State -> ST s ()
-setS dfa i u = do
-    us <- stateTab <$> readSTRef dfa
+setState :: DFA s -> StateID -> State -> ST s ()
+setState dfa i u = do
+    us <- stateVect <$> readSTRef dfa
     V.write us i u
 
 
+-- | Get a number of ingoing paths for a given state.
+getIngo :: DFA s -> StateID -> ST s Int
+getIngo dfa i = do
+    v <- ingoVect <$> readSTRef dfa
+    fromIntegral <$> U.read v i
+
+
+-- | Get a number of ingoing paths for a given state.
+setIngo :: DFA s -> StateID -> Int -> ST s ()
+setIngo dfa i x = do
+    v <- ingoVect <$> readSTRef dfa
+    U.write v i (fromIntegral x)
+
+
 -- | Incerement the number of ingoing paths for a given state.
+-- TODO: Implement and use modifyIngo function?
 incIngo :: DFA s -> StateID -> ST s ()
 incIngo dfa i = do
-    u <- getS dfa i
-    setS dfa i $ N.incIngo u
+    v <- ingoVect <$> readSTRef dfa
+    x <- U.read v i
+    U.write v i (x + 1)
 
 
 -- | Get the outgoing transition.  Return `Nothin` if there is
 -- no transition on a given symbol.
 getTrans :: DFA s -> StateID -> Sym -> ST s (Maybe StateID)
-getTrans dfa i x = N.getTrans x <$> getS dfa i
+getTrans dfa i x = N.getTrans x <$> getState dfa i
 
 
 -- | Set the outgoing transition.  Use `Nothing` to delete
 -- the transition.
+-- TODO: Implement modifyTrans and use it here.
 setTrans :: DFA s -> StateID -> Sym -> Maybe StateID -> ST s ()
 setTrans dfa i x j = do
-    u <- getS dfa i
-    setS dfa i $ N.setTrans x j u
+    u <- getState dfa i
+    setState dfa i $ N.setTrans x j u
 
 
 -- | Get a state value.
 getValue :: DFA s -> StateID -> ST s (Maybe Val)
-getValue dfa i = N.value <$> getS dfa i
+getValue dfa i = N.value <$> getState dfa i
 
 
 -- | Set a state value.
+-- TODO: Implement modifyValue and use it here.
 setValue :: DFA s -> StateID -> Maybe Val -> ST s ()
 setValue dfa i y = do
-    u <- getS dfa i
-    setS dfa i $ N.setValue y u
+    u <- getState dfa i
+    setState dfa i $ N.setValue y u
 
 
 -- | Lookup state identifier in a DFA.
@@ -238,7 +267,7 @@ lookup dfa u = M.lookup u . stateMap <$> readSTRef dfa
 -- another equivalent state in the automaton, if present, and this is
 -- the functionality we use in other, higher-level functions.
 lookupID :: DFA s -> StateID -> ST s (Maybe StateID)
-lookupID dfa i = getS dfa i >>= lookup dfa
+lookupID dfa i = getState dfa i >>= lookup dfa
 
 
 -- | Add new state into the automaton.  The function doesn't
@@ -247,7 +276,7 @@ _add :: DFA s -> State -> ST s StateID
 _add dfa u = do
     free <- freeStack <$> readSTRef dfa
     P.pop free >>= \case
-        Just i  -> i <$ setS dfa i u
+        Just i  -> i <$ setState dfa i u
         Nothing -> do
             grow dfa
             fromJust <$> P.pop free
@@ -287,8 +316,9 @@ branch dfa [] y = do
 -- ingoing paths to 1 in the new slot.
 copy :: DFA s -> StateID -> ST s StateID
 copy dfa i = do
-    u <- getS dfa i
-    _add dfa $ u { N.ingoNum = 1 }
+    j <- _add dfa =<< getState dfa i
+    setIngo dfa j 1
+    return j
 
 
 ----------------------------------------------------------------------
@@ -304,8 +334,8 @@ copy dfa i = do
 -- | Insert a (word, value) pair within a context of a state.
 insert :: DFA s -> [Sym] -> Val -> StateID -> ST s StateID
 insert dfa xs y i = do
-    u <- getS dfa i
-    let doInsert = if N.isConfl u
+    ingoNum <- getIngo dfa i
+    let doInsert = if ingoNum > 1
             then insertConfl
             else insertNonConfl
     doInsert dfa xs y i
