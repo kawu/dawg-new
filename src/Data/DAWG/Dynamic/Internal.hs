@@ -112,13 +112,15 @@
 module Data.DAWG.Dynamic.Internal
 ( DFA_State (..)
 , DFA
+, empty
 , insert
 , insertRoot
+, lookup
 ) where
 
 
 import           Prelude hiding (lookup)
-import           Control.Applicative ((<$>), (<$))
+import           Control.Applicative ((<$>), (<$), (<*>), pure)
 import           Control.Monad (forM_)
 import           Data.Int (Int32)
 import           Data.Maybe (fromJust)
@@ -156,6 +158,19 @@ data DFA_State s = DFA_State {
 
 -- | A DFA reference.
 type DFA s = STRef s (DFA_State s)
+
+
+-- | An empty DFA with one root state ID.
+empty :: ST s (DFA s, StateID)
+empty = do
+    dfaState <- DFA_State
+        <$> V.new 0
+        <*> U.new 0
+        <*> P.empty
+        <*> pure M.empty
+    dfa  <- newSTRef dfaState
+    i    <- _addState dfa N.empty
+    return (dfa, i)
 
 
 ----------------------------------------------------------------------
@@ -250,34 +265,35 @@ setValue dfa i y = do
 
 
 -- | Lookup state identifier in a DFA.
-lookup :: DFA s -> State -> ST s (Maybe StateID)
-lookup dfa u = M.lookup u . stateMap <$> readSTRef dfa
+lookupState :: DFA s -> State -> ST s (Maybe StateID)
+lookupState dfa u = M.lookup u . stateMap <$> readSTRef dfa
 
 
--- | Same as `lookup`, but looks for a state equivalent to a state residing
+-- | Same as `lookupState`, but looks for a state equivalent to a state residing
 -- under a given identifier.  Intuitively, it should be the same state ID
 -- as the one supplied as argument.  However, if the state is not yet
 -- registered in the hash table `stateMap`, the function will return
 -- another equivalent state in the automaton, if present, and this is
 -- the functionality we use in other, higher-level functions.
-lookupID :: DFA s -> StateID -> ST s (Maybe StateID)
-lookupID dfa i = getState dfa i >>= lookup dfa
+lookupStateID :: DFA s -> StateID -> ST s (Maybe StateID)
+lookupStateID dfa i = getState dfa i >>= lookupState dfa
 
 
 -- | Add new state into the automaton.  The function assumes,
 -- that the state is not a member of the automaton.
-_add :: DFA s -> State -> ST s StateID
-_add dfa u = do
-    dfaState@DFA_State{..} <- readSTRef dfa
-    i <- P.pop freeStack >>= \case
+_addState :: DFA s -> State -> ST s StateID
+_addState dfa u = do
+    free <- freeStack <$> readSTRef dfa
+    i <- P.pop free >>= \case
         Just i  -> return i
         Nothing -> do
             grow dfa
-            fromJust <$> P.pop freeStack
+            fromJust <$> P.pop free
     setState dfa i u
     setIngo  dfa i 1
-    let stateMap' = M.insert u i stateMap
-    writeSTRef dfa $ dfaState { stateMap = stateMap' }
+    modifySTRef dfa $ \dfaState ->
+        let stateMap' = M.insert u i (stateMap dfaState)
+        in  dfaState { stateMap = stateMap' }
     return i
 
 
@@ -288,15 +304,15 @@ _add dfa u = do
 -- within a context of a new path.  Therefore, if the state is
 -- already a member of the automaton, we increase the number of
 -- ingoing paths to this state.
-add :: DFA s -> State -> ST s StateID
-add dfa u = lookup dfa u >>= \case
-    Nothing -> _add dfa u
+addState :: DFA s -> State -> ST s StateID
+addState dfa u = lookupState dfa u >>= \case
+    Nothing -> _addState dfa u
     Just i  -> i <$ incIngo dfa i
 
 
 -- | Remove state from the automaton.
-remove :: DFA s -> StateID -> ST s ()
-remove dfa i = do
+removeState :: DFA s -> StateID -> ST s ()
+removeState dfa i = do
     dfaState@DFA_State{..} <- readSTRef dfa
     P.push i freeStack
     stateMap' <- flip M.delete stateMap <$> getState dfa i
@@ -307,16 +323,16 @@ remove dfa i = do
 branch :: DFA s -> [Sym] -> Val -> ST s StateID
 branch dfa (x:xs) y = do
     j <- branch dfa xs y
-    add dfa $ N.state Nothing [(x, j)]
+    addState dfa $ N.state Nothing [(x, j)]
 branch dfa [] y = do
-    add dfa $ N.state (Just y) []
+    addState dfa $ N.state (Just y) []
 
 
 -- | Copy state to a new slot and set the number of
 -- ingoing paths to 1 in the new slot.
 copy :: DFA s -> StateID -> ST s StateID
 copy dfa i = do
-    j <- _add dfa =<< getState dfa i
+    j <- _addState dfa =<< getState dfa i
     setIngo dfa j 1
     return j
 
@@ -353,7 +369,7 @@ insertConfl dfa (x:xs) y i0 = do
         Just j  -> insertConfl dfa xs y j
         Nothing -> branch dfa xs y
     setTrans dfa i0 x j1
-    i1 <- lookupID dfa i0 >>= \case
+    i1 <- lookupStateID dfa i0 >>= \case
         Just i  -> i <$ incIngo dfa i
         Nothing -> copy dfa i0
     setTrans dfa i0 x j0
@@ -363,7 +379,7 @@ insertConfl dfa (x:xs) y i0 = do
 insertConfl dfa [] y1 i0 = do
     y0 <- getValue dfa i0
     setValue dfa i0 $ Just y1
-    i1 <- lookupID dfa i0 >>= \case
+    i1 <- lookupStateID dfa i0 >>= \case
         Just i  -> i <$ incIngo dfa i
         Nothing -> copy dfa i0
     setValue dfa i0 y0
@@ -381,18 +397,18 @@ insertNonConfl dfa (x:xs) y i0 = do
         Just j  -> insert dfa xs y j
         Nothing -> branch dfa xs y
     setTrans dfa i0 x j1
-    lookupID dfa i0 >>= \case
+    lookupStateID dfa i0 >>= \case
         -- Before and after, the number of ingoing paths is equal to 1.
         Nothing -> return i0
         Just i  -> do
-            remove dfa i0
+            removeState dfa i0
             i <$ incIngo dfa i
 
 -- CASE: Empty path.
 insertNonConfl dfa [] y1 i0 = do
     y0 <- getValue dfa i0
     setValue dfa i0 $ Just y1
-    i1 <- lookupID dfa i0 >>= \case
+    i1 <- lookupStateID dfa i0 >>= \case
         Just i  -> i <$ incIngo dfa i
         Nothing -> copy dfa i0
     setValue dfa i0 y0
@@ -410,3 +426,11 @@ insertRoot dfa (x:xs) y i = do
         Just j  -> insert dfa xs y j
         Nothing -> branch dfa xs y
     setTrans dfa i x j1
+
+
+-- | Lookup a word in a DFA.
+lookup :: DFA s -> [Sym] -> StateID -> ST s (Maybe Val)
+lookup dfa (x:xs) i = getTrans dfa i x >>= \case
+    Nothing -> return Nothing
+    Just j  -> lookup dfa xs j
+lookup dfa [] i     = getValue dfa i
