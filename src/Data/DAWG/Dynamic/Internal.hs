@@ -97,11 +97,23 @@
  -   sensie za darmo: znając identyfikator stanu, możemy
  -   szybko wyszukać odpowiedni stan w tablicy stanów automatu,
  -   na podstawie którego możemy już obliczeń wartość hasz.
+ -
+ -
+ - Notatki
+ - =======
+ -
+ - Na etapie obliczeń musimy aktualizować (m.in.) dwa ważne elementy
+ - stanu: liczby wchodzących do poszczególnych stanów ścieżek oraz 
+ - mapę haszów.
+ -
  -}
 
 
 module Data.DAWG.Dynamic.Internal
-(
+( DFA_State (..)
+, DFA
+, insert
+, insertRoot
 ) where
 
 
@@ -110,7 +122,6 @@ import           Control.Applicative ((<$>), (<$))
 import           Control.Monad (forM_)
 import           Data.Maybe (fromJust)
 import qualified Data.Vector.Mutable as V
-import qualified Data.Vector.Unboxed.Mutable as U
 import qualified Data.Map as M
 import           Data.STRef
 import           Control.Monad.ST
@@ -132,7 +143,7 @@ data DFA_State s = DFA_State {
     -- in the vector represents its `StateID`.
       stateTab  :: V.MVector s State
     -- | A vector of free state slots.
-    , freeTab   :: P.Stack s StateID
+    , freeStack :: P.Stack s StateID
     -- | A hash table which is used to translate states
     -- to their corresponding identifiers.
     , stateMap  :: M.Map State StateID }
@@ -143,11 +154,29 @@ type DFA s = STRef s (DFA_State s)
 
 
 ----------------------------------------------------------------------
--- Primitive operations
+-- Low-level operations
 --
--- These operations *do not* guarantee consistency between the set of
--- registered states and the hash table used for quick lookup.
+--   * Consistency on the level of ingoing path numbers: yes
+--     (with the exception of the functions starting with @_@).
+--
+--   * Consistency on the level of hash table: no
+--
 ----------------------------------------------------------------------
+
+
+-- | Grow DFA with new, empty states.
+grow :: DFA s -> ST s ()
+grow dfa = do
+    dfaState@DFA_State{..} <- readSTRef dfa
+    let n = V.length stateTab
+
+    -- Use n+1 to handle empty dfa.
+    stateTab' <- V.grow stateTab (n + 1)
+    writeSTRef dfa $ dfaState { stateTab = stateTab' }
+
+    forM_ [n .. 2*n] $ \i -> do
+        setS dfa i N.empty
+        P.push i freeStack
 
 
 -- | Retrieve state with a given identifier.
@@ -164,19 +193,11 @@ setS dfa i u = do
     V.write us i u
 
 
--- | Grow DFA with new, empty states.
-grow :: DFA s -> ST s ()
-grow dfa = do
-    dfaState@DFA_State{..} <- readSTRef dfa
-    let n = V.length stateTab
-
-    -- Use n+1 to handle empty dfa.
-    stateTab' <- V.grow stateTab (n + 1)
-    writeSTRef dfa $ dfaState { stateTab = stateTab' }
-
-    forM_ [n .. 2*n] $ \i -> do
-        setS dfa i N.empty
-        P.push i freeTab
+-- | Incerement the number of ingoing paths for a given state.
+incIngo :: DFA s -> StateID -> ST s ()
+incIngo dfa i = do
+    u <- getS dfa i
+    setS dfa i $ N.incIngo u
 
 
 -- | Get the outgoing transition.  Return `Nothin` if there is
@@ -189,11 +210,20 @@ getTrans dfa i x = N.getTrans x <$> getS dfa i
 -- the transition.
 setTrans :: DFA s -> StateID -> Sym -> Maybe StateID -> ST s ()
 setTrans dfa i x j = do
---     us <- stateTab <$> readSTRef dfa
---     u  <- V.read us i
---     V.write us i (N.setTrans x j u)
     u <- getS dfa i
     setS dfa i $ N.setTrans x j u
+
+
+-- | Get a state value.
+getValue :: DFA s -> StateID -> ST s (Maybe Val)
+getValue dfa i = N.value <$> getS dfa i
+
+
+-- | Set a state value.
+setValue :: DFA s -> StateID -> Maybe Val -> ST s ()
+setValue dfa i y = do
+    u <- getS dfa i
+    setS dfa i $ N.setValue y u
 
 
 -- | Lookup state identifier in a DFA.
@@ -213,9 +243,9 @@ lookupID dfa i = getS dfa i >>= lookup dfa
 
 -- | Add new state into the automaton.  The function doesn't
 -- check, if the state is already a member of the automaton.
-addState_ :: DFA s -> State -> ST s StateID
-addState_ dfa u = do
-    free <- freeTab <$> readSTRef dfa
+_add :: DFA s -> State -> ST s StateID
+_add dfa u = do
+    free <- freeStack <$> readSTRef dfa
     P.pop free >>= \case
         Just i  -> i <$ setS dfa i u
         Nothing -> do
@@ -225,17 +255,40 @@ addState_ dfa u = do
 
 -- | Add new state into the automaton.  First check, if it
 -- is not already a member of the automaton.
-addState :: DFA s -> State -> ST s StateID
-addState dfa u = lookup dfa u >>= \case
-    Nothing -> addState_ dfa u
-    Just i  -> return i
+--
+-- We assume, that every time a new state is added, it is added
+-- within a context of a new path.  Therefore, if the state is
+-- already a member of the automaton, we increase the number of
+-- ingoing paths to this state.
+add :: DFA s -> State -> ST s StateID
+add dfa u = lookup dfa u >>= \case
+    Nothing -> _add dfa u
+    Just i  -> i <$ incIngo dfa i
+
+
+-- | Remove state from the automaton.
+remove :: DFA s -> StateID -> ST s ()
+remove dfa i = do
+    DFA_State{..} <- readSTRef dfa
+    P.push i freeStack
+    -- TODO: Update stateMap
 
 
 -- | Create a new branch in a DFA.
 branch :: DFA s -> [Sym] -> Val -> ST s StateID
 branch dfa (x:xs) y = do
     j <- branch dfa xs y
-    addState dfa $ N.state Nothing [(x, j)]
+    add dfa $ N.state Nothing [(x, j)]
+branch dfa [] y = do
+    add dfa $ N.state (Just y) []
+
+
+-- | Copy state to a new slot and set the number of
+-- ingoing paths to 1 in the new slot.
+copy :: DFA s -> StateID -> ST s StateID
+copy dfa i = do
+    u <- getS dfa i
+    _add dfa $ u { N.ingoNum = 1 }
 
 
 ----------------------------------------------------------------------
@@ -243,66 +296,91 @@ branch dfa (x:xs) y = do
 ----------------------------------------------------------------------
 
 
--- -- | Insert a (word, value) pair within a context of
--- -- a confluent state.
--- -- TODO: Handle empty word case.
--- insertConfl :: [Sym] -> Val -> StateID -> DFA s -> ST s StateID
--- insertConfl (x:xs) y i0 dfa = do
--- 
---     -- Store target of the current x-transition.
---     j0 <- getTrans dfa i0 x
--- 
---     -- Determine root state ID of a branch below.
---     j1 <- Just <$> case j0 of
---         -- A child of a confluent state is also a confluent state.
---         Just j  -> insertConfl dfa xs y j
---         Nothing -> branch dfa xs y
---     -- TODO: Stop computation when (j0 == j1)?
--- 
---     -- Add the outgoing transition.  The current state is changed.
---     -- Hash of the state is also changed here and now.
---     setTrans dfa i0 x j1
--- 
---     -- Lookup identical state.
---     i1 <- lookup dfa i0 >>= case of
---         Just i  -> return i
---         Nothing -> copy dfa i0
--- 
---     -- Restore the current state to its original form.
---     setTrans dfa i0 x j0
--- 
---     -- Return the resultant state.
---     return i1
+-- TODO: The functions below will probably crash when the element
+-- beeing inserted is already element of the DFA.
 
 
--- -- | Insert a (word, value) pair within a context of
--- -- a non-confluent state.
--- insertNonConfl :: [Sym] -> Val -> StateID -> DFA StateID
--- insertNonConfl (x:xs) y i0 = do
--- 
---     -- Store target of the current x-transition.
---     j0 <- getTrans i0 x
--- 
---     -- Determine root state ID of a branch below.
---     j1 <- case j0 of
---         Just j  -> insert xs y j
---         Nothing -> branch xs y
---     -- TODO: Stop computation when (j0 == j1)?
--- 
---     -- Add the outgoing transition.  The current state is changed.
---     -- Hash of the state is also changed here and now.
---     setTrans i0 x j1
--- 
---     -- Lookup identical state.
---     lookup i0 >>= case of
---         Nothing -> return i0
---         Just i  -> do
---             -- TODO: Should we restore the (x -> j0)
---             -- transition before deletion?
---             delete i0
---             return i
---
---
+-- | Insert a (word, value) pair within a context of a state.
+insert :: DFA s -> [Sym] -> Val -> StateID -> ST s StateID
+insert dfa xs y i = do
+    u <- getS dfa i
+    let doInsert = if N.isConfl u
+            then insertConfl
+            else insertNonConfl
+    doInsert dfa xs y i
+
+
+-- | Insert a (word, value) pair within a context of a confluent state.
+-- TODO: Cur off computation when (j0 == j1).
+insertConfl :: DFA s -> [Sym] -> Val -> StateID -> ST s StateID
+
+-- CASE: Non-empty path.
+insertConfl dfa (x:xs) y i0 = do
+    j0 <- getTrans dfa i0 x
+    j1 <- Just <$> case j0 of
+        -- A child of a confluent state is also a confluent state.
+        Just j  -> insertConfl dfa xs y j
+        Nothing -> branch dfa xs y
+    setTrans dfa i0 x j1
+    i1 <- lookupID dfa i0 >>= \case
+        Just i  -> i <$ incIngo dfa i
+        Nothing -> copy dfa i0
+    setTrans dfa i0 x j0
+    return i1
+
+-- CASE: Empty path.
+insertConfl dfa [] y1 i0 = do
+    y0 <- getValue dfa i0
+    setValue dfa i0 $ Just y1
+    i1 <- lookupID dfa i0 >>= \case
+        Just i  -> i <$ incIngo dfa i
+        Nothing -> copy dfa i0
+    setValue dfa i0 y0
+    return i1
+
+
+-- | Insert a (word, value) pair within a context of a non-confluent state.
+-- TODO: Stop computation when (j0 == j1)?
+insertNonConfl :: DFA s -> [Sym] -> Val -> StateID -> ST s StateID
+
+-- CASE: Non-empty path.
+insertNonConfl dfa (x:xs) y i0 = do
+    j0 <- getTrans dfa i0 x
+    j1 <- Just <$> case j0 of
+        Just j  -> insert dfa xs y j
+        Nothing -> branch dfa xs y
+    setTrans dfa i0 x j1
+    lookupID dfa i0 >>= \case
+        -- Before and after, the number of ingoing paths is equal to 1.
+        Nothing -> return i0
+        Just i  -> do
+            remove dfa i0
+            i <$ incIngo dfa i
+
+-- CASE: Empty path.
+insertNonConfl dfa [] y1 i0 = do
+    y0 <- getValue dfa i0
+    setValue dfa i0 $ Just y1
+    i1 <- lookupID dfa i0 >>= \case
+        Just i  -> i <$ incIngo dfa i
+        Nothing -> copy dfa i0
+    setValue dfa i0 y0
+    return i1
+
+
+-- | Insert a (word, value) pair under the assumption, that
+-- a state ID represents a DFA root.  In particular, ID
+-- of the root doen't change.
+insertRoot :: DFA s -> [Sym] -> Val -> StateID -> ST s ()
+insertRoot dfa [] y i = setValue dfa i $ Just y
+insertRoot dfa (x:xs) y i = do
+    j0 <- getTrans dfa i x
+    j1 <- Just <$> case j0 of
+        Just j  -> insert dfa xs y j
+        Nothing -> branch dfa xs y
+    setTrans dfa i x j1
+
+
 ----------------------------------------------------------------------
 -- OLD VERSION
 ----------------------------------------------------------------------

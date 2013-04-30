@@ -5,14 +5,14 @@
 
 
 module Data.DAWG.Dynamic.State
-( State
+( State (..)
 , empty
-, vstate
 , state
+, setValue
 , getTrans
 , setTrans
 , incIngo
-, decIngo
+, isConfl
 ) where
 
 
@@ -26,27 +26,26 @@ import           Data.DAWG.Dynamic.Types
 data State = State {
     -- | A (maybe) value kept in the state.
       value     :: Maybe Val
-    -- | A number of ingoing paths (size of a left language).  
+    -- | A number of ingoing paths (size of the left language).
     , ingoNum   :: {-# UNPACK #-} !Int32
     -- | A map of outgoing edges.
     , edgeMap   :: M.Map Sym StateID
     } deriving (Show, Eq, Ord)
 
 
--- | An empty state.
+-- | An empty state with one ingoing path.
 empty :: State
-empty = State Nothing 0 M.empty
+empty = State Nothing 1 M.empty
 
 
--- | A state with initial value.
-vstate :: Val -> State
-vstate x = State (Just x) 0 M.empty
-
-
--- | A generic state construction method.
--- TODO: One ingoing edge?
+-- | A state with one ingoing path.
 state :: Maybe Val -> [(Sym, StateID)] -> State
 state x = State x 1 . M.fromList
+
+
+-- | Set a state value.
+setValue :: Maybe Val -> State -> State
+setValue value' u = u { value = value' }
 
 
 -- | Get the outgoing transition on a given symbol or `Nothing`.
@@ -62,11 +61,12 @@ setTrans x mj st@State{..} = case mj of
     Just j  -> st { edgeMap = M.insert x j edgeMap }
 
 
--- | Increase the number of ingoing paths by one.
+-- | Increment the number of ingoing paths.
 incIngo :: State -> State
-incIngo = undefined
+incIngo u = u { ingoNum = ingoNum u + 1 }
 
 
--- | Decrease the number of ingoing paths by one.
-decIngo :: State -> State
-decIngo = undefined
+-- | Is the state a confluent state?  That is, is the number
+-- of ingoing paths greater then 1?
+isConfl :: State -> Bool
+isConfl = (>1) . ingoNum
