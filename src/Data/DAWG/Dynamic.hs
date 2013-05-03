@@ -9,28 +9,31 @@ module Data.DAWG.Dynamic
 -- * DAWG type
   DAWG
 
--- -- * Query
+-- * Query
 -- , numStates
 -- , numEdges
--- , lookup
--- 
+, lookup
+
 -- -- * Construction
--- , empty
+, empty
 -- , fromList
 -- , fromListWith
 -- , fromLang
--- 
--- -- ** Insertion
--- , insert
+
+-- ** Insertion
+, insert
 -- , insertWith
--- 
--- -- ** Deletion
--- , delete
--- 
+
+-- ** Deletion
+, delete
+
 -- -- * Conversion
 -- , assocs
 -- , keys
 -- , elems
+
+-- * Printing
+, printDAWG
 ) where
 
 
@@ -39,19 +42,22 @@ import           Control.Monad.ST
 
 import           Data.DAWG.Dynamic.Types
 import qualified Data.DAWG.Dynamic.Internal as I
+import           Data.DAWG.Dynamic.Internal (DAWG, empty, printDAWG)
 
 
--- | Empty DAWG.
-data DAWG s = DAWG
-    { body  :: I.DFA s
-    , root  :: StateID }
+-- | Insert (word, value) pair into the DAWG.
+insert :: DAWG s -> [Sym] -> Val -> ST s ()
+insert dawg xs y = I.insertRoot (I.dfa dawg) xs (Just y) (I.root dawg)
 
 
--- | An empty DAWG.
-empty :: ST s (DAWG s)
-empty = do
-    (dfa, i) <- I.empty
-    return $ DAWG dfa i
+-- | Remove word from the DAWG.
+delete :: DAWG s -> [Sym] -> ST s ()
+delete dawg xs = I.insertRoot (I.dfa dawg) xs Nothing (I.root dawg)
+
+
+-- | Lookup a word in the automaton.
+lookup :: DAWG s -> [Sym] -> ST s (Maybe Val)
+lookup dawg xs = I.lookup (I.dfa dawg) xs (I.root dawg)
 
 
 -- -- | Number of states in the automaton.

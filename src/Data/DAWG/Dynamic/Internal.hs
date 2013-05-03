@@ -1,21 +1,27 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE DoAndIfThenElse #-}
 
 
 module Data.DAWG.Dynamic.Internal
-( DFAData (..)
+(
+-- * DFA
+  DFAData (..)
 , DFA
-, empty
 , insert
 , insertRoot
 , lookup
-, printDFA
+
+-- * DAWG
+, DAWG (..)
+, empty
+, printDAWG
 ) where
 
 
 import           Prelude hiding (lookup)
 import           Control.Applicative ((<$>), (<$), (<*>), pure)
-import           Control.Monad (void, forM_)
+import           Control.Monad (forM_, unless)
 import           Data.Int (Int32)
 import           Data.Maybe (fromJust)
 import qualified Data.Traversable as T
@@ -55,11 +61,9 @@ data DFAData s = DFAData {
     , ingoVect  :: U.MVector s Int32
     -- | A stack of free state slots, i.e. inactive states identifiers.
     , freeStack :: P.Stack s StateID
-    -- | A map which is used to translate active states to their
-    -- corresponding identifiers.  Inactive states are not kept
-    -- it the map.
-    -- TODO: The root state can be treated in a special way.  In particular,
-    -- it should not be an element of the `stateMap`.
+    -- | A map which is used to translate active states (with an exception
+    -- of the root) to their corresponding identifiers.  Inactive states
+    -- are not kept in the map.
     , stateMap  :: M.Map State StateID }
 
 
@@ -116,6 +120,8 @@ setIngo :: DFA s -> StateID -> Int -> ST s ()
 setIngo dfa i x = do
     v <- ingoVect <$> readSTRef dfa
     U.write v i (fromIntegral x)
+
+
 -- | Lookup state identifier in a DFA.
 lookupState :: DFA s -> State -> ST s (Maybe StateID)
 lookupState dfa u = M.lookup u . stateMap <$> readSTRef dfa
@@ -143,6 +149,11 @@ _addState dfa u = do
 -- Medium-level interface (an additional layer between the low-level
 -- and the high-level functionality).
 ----------------------------------------------------------------------
+
+
+-- | It the state "useful"?
+usefulState :: DFA s -> StateID -> ST s Bool
+usefulState dfa i = not . N.null <$> getState dfa i
 
 
 -- | Incerement the number of ingoing paths for a given state.
@@ -237,19 +248,6 @@ branch dfa [] y = do
 ----------------------------------------------------------------------
 
 
--- | An empty DFA with one root state ID.
-empty :: ST s (DFA s, StateID)
-empty = do
-    dfaData <- DFAData
-        <$> V.new 0
-        <*> U.new 0
-        <*> P.empty
-        <*> pure M.empty
-    dfa  <- newSTRef dfaData
-    i    <- addState dfa N.empty
-    return (dfa, i)
-
-
 -- | Insert a (word, value) pair within a context of a state.
 insert :: DFA s -> [Sym] -> Maybe Val -> StateID -> ST s (Maybe StateID)
 insert dfa xs y i = do
@@ -261,10 +259,12 @@ insert dfa xs y i = do
 
 
 -- | Compute `Just` value when `True` or `Nothing` otherwise.
-whenTrue :: Monad m => Bool -> m a -> m (Just a)
-whenTrue x m = if x
-    then Just <$> m
-    else return Nothing
+whenTrue :: (Functor m, Monad m) => m Bool -> m a -> m (Maybe a)
+whenTrue mx m = do
+    x <- mx
+    if x 
+        then Just <$> m
+        else return Nothing
 
 
 -- | Insert a (word, value) pair within a context of a confluent state.
@@ -301,7 +301,7 @@ insertConfl dfa [] y1 i0 = do
 
 
 -- | Insert a (word, value) pair within a context of a non-confluent state.
-insertNonConfl :: DFA s -> [Sym] -> Val -> StateID -> ST s StateID
+insertNonConfl :: DFA s -> [Sym] -> Maybe Val -> StateID -> ST s (Maybe StateID)
 
 
 -- CASE: Non-empty path.
@@ -331,7 +331,7 @@ insertNonConfl dfa [] y1 i0 = do
 -- a state ID represents a DFA root.  In particular, ID
 -- of the root doen't change.
 -- TODO: Rename this function to insert?
-insertRoot :: DFA s -> [Sym] -> Val -> StateID -> ST s ()
+insertRoot :: DFA s -> [Sym] -> Maybe Val -> StateID -> ST s ()
 insertRoot dfa (x:xs) y i0 = do
     j0 <- getTrans dfa i0 x
     j1 <- case j0 of
@@ -350,15 +350,45 @@ lookup dfa [] i     = getValue dfa i
 
 
 ----------------------------------------------------------------------
+-- DAWG
+----------------------------------------------------------------------
+
+
+-- | A DAWG is a DFA with a distinguished root.
+data DAWG s = DAWG
+    { dfa   :: DFA s
+    , root  :: StateID }
+
+
+-- | An empty DAWG.
+empty :: ST s (DAWG s)
+empty = do
+    dfaData <- DFAData
+        <$> V.new 0
+        <*> U.new 0
+        <*> P.empty
+        <*> pure M.empty
+    dfa  <- newSTRef dfaData
+    i    <- addState dfa N.empty
+    -- The root must not be in the state map.
+    modifySTRef dfa $ \x -> x { stateMap = M.empty }
+    return $ DAWG dfa i
+
+
+----------------------------------------------------------------------
 -- Printing
 ----------------------------------------------------------------------
 
 
 -- | A helper DFA printing function.
-printDFA :: DFA RealWorld -> IO ()
-printDFA dfa = do
+printDAWG :: DAWG RealWorld -> IO ()
+printDAWG DAWG{..} = do
     -- TODO: Print size of the left-language
-    DFAData{..} <- stToIO $ readSTRef dfa
-    forM_ (M.toList stateMap) $ \(state, i) -> do
+    DFAData{..} <- stToIO $ readSTRef dfa 
+
+    rootState <- stToIO $ getState dfa root
+    forM_ ((rootState, root) : M.toList stateMap) $ \(u, i) -> do
         putStrLn $ "== " ++ show i ++ " =="
-        N.printState state
+        ingo <- stToIO $ getIngo dfa  i
+        putStr "ingo:\t" >> print ingo
+        N.printState u

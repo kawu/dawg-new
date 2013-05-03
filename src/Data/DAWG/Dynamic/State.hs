@@ -7,6 +7,7 @@
 module Data.DAWG.Dynamic.State
 ( State (..)
 , empty
+, null
 , state
 , setValue
 , getTrans
@@ -15,6 +16,7 @@ module Data.DAWG.Dynamic.State
 ) where
 
 
+import           Prelude hiding (null)
 import qualified Data.Map as M
 
 import           Data.DAWG.Dynamic.Types
@@ -32,6 +34,12 @@ data State = State {
 -- | An empty state with one ingoing path.
 empty :: State
 empty = State Nothing M.empty
+
+
+-- | Is the state empty?
+null :: State -> Bool
+null (State Nothing m) = M.null m
+null _                 = False
 
 
 -- | A state with one ingoing path.
@@ -60,5 +68,5 @@ setTrans x mj st@State{..} = case mj of
 -- | A helper state printing function.
 printState :: State -> IO ()
 printState State{..} = do
-    print value
+    putStr "value:\t" >> print value
     mapM_ print (M.toList edgeMap)
