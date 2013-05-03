@@ -3,6 +3,7 @@ module Data.DAWG.Dynamic
 , empty
 , insert
 , lookup
+, printDFA
 ) where
 
 
@@ -34,3 +35,8 @@ insert dfa xs y = I.insertRoot (body dfa) xs y (root dfa)
 -- | Lookup a word in the automaton.
 lookup :: DFA s -> [Sym] -> ST s (Maybe Val)
 lookup dfa xs = I.lookup (body dfa) xs (root dfa)
+
+
+-- | A helper DFA printing function.
+printDFA :: DFA RealWorld -> IO ()
+printDFA dfa = I.printDFA $ body dfa

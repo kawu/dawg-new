@@ -106,6 +106,10 @@
  - stanu: liczby wchodzących do poszczególnych stanów ścieżek oraz 
  - mapę haszów.
  -
+ - Tablica stanów dzieli się na dwie grupy: stany, które należą do
+ - automatu, oraz stany "nieaktywne".  Należy wyszczególnić, które
+ - funkcje działają na stanach aktywnych, a które na nieaktywnych.
+ -
  -}
 
 
@@ -116,12 +120,13 @@ module Data.DAWG.Dynamic.Internal
 , insert
 , insertRoot
 , lookup
+, printDFA
 ) where
 
 
 import           Prelude hiding (lookup)
 import           Control.Applicative ((<$>), (<$), (<*>), pure)
-import           Control.Monad (forM_)
+import           Control.Monad (void, forM_)
 import           Data.Int (Int32)
 import           Data.Maybe (fromJust)
 import qualified Data.Vector.Mutable as V
@@ -141,7 +146,7 @@ import qualified Data.DAWG.Dynamic.Stack as P
 ----------------------------------------------------------------------
 
 
--- | A state of DFA application.
+-- | A state of DFA application (*not* a state of an automaton!).
 data DFA_State s = DFA_State {
     -- | A vector of DFA states.  A position of a state
     -- in the vector represents its `StateID`.
@@ -236,6 +241,15 @@ incIngo dfa i = do
     U.write v i (x + 1)
 
 
+-- | Incerement the number of ingoing paths for a given state.
+-- TODO: Implement and use modifyIngo function?
+decIngo :: DFA s -> StateID -> ST s ()
+decIngo dfa i = do
+    v <- ingoVect <$> readSTRef dfa
+    x <- U.read v i
+    U.write v i (x - 1)
+
+
 -- | Get the outgoing transition.  Return `Nothin` if there is
 -- no transition on a given symbol.
 getTrans :: DFA s -> StateID -> Sym -> ST s (Maybe StateID)
@@ -269,14 +283,14 @@ lookupState :: DFA s -> State -> ST s (Maybe StateID)
 lookupState dfa u = M.lookup u . stateMap <$> readSTRef dfa
 
 
--- | Same as `lookupState`, but looks for a state equivalent to a state residing
--- under a given identifier.  Intuitively, it should be the same state ID
--- as the one supplied as argument.  However, if the state is not yet
--- registered in the hash table `stateMap`, the function will return
--- another equivalent state in the automaton, if present, and this is
--- the functionality we use in other, higher-level functions.
-lookupStateID :: DFA s -> StateID -> ST s (Maybe StateID)
-lookupStateID dfa i = getState dfa i >>= lookupState dfa
+-- -- | Same as `lookupState`, but looks for a state equivalent to a state residing
+-- -- under a given identifier.  Intuitively, it should be the same state ID
+-- -- as the one supplied as argument.  However, if the state is not yet
+-- -- registered in the hash table `stateMap`, the function will return
+-- -- another equivalent state in the automaton, if present, and this is
+-- -- the functionality we use in other, higher-level functions.
+-- lookupStateID :: DFA s -> StateID -> ST s (Maybe StateID)
+-- lookupStateID dfa i = getState dfa i >>= lookupState dfa
 
 
 -- | Add new state into the automaton.  The function assumes,
@@ -310,6 +324,17 @@ addState dfa u = lookupState dfa u >>= \case
     Just i  -> i <$ incIngo dfa i
 
 
+-- | Add new state into the automaton.  First check, if it
+-- is not already a member of the automaton.
+--
+-- We assume, that every time a new state is added, it is added
+-- within a context of a new path.  Therefore, if the state is
+-- already a member of the automaton, we increase the number of
+-- ingoing paths to this state.
+addStateID :: DFA s -> StateID -> ST s StateID
+addStateID dfa i = getState dfa i >>= addState dfa
+
+
 -- | Remove state from the automaton.
 removeState :: DFA s -> StateID -> ST s ()
 removeState dfa i = do
@@ -328,13 +353,11 @@ branch dfa [] y = do
     addState dfa $ N.state (Just y) []
 
 
--- | Copy state to a new slot and set the number of
--- ingoing paths to 1 in the new slot.
-copy :: DFA s -> StateID -> ST s StateID
-copy dfa i = do
-    j <- _addState dfa =<< getState dfa i
-    setIngo dfa j 1
-    return j
+-- -- | Copy state to a new slot and set the number of
+-- -- ingoing paths to 1 in the new slot.
+-- copy :: DFA s -> StateID -> ST s StateID
+-- copy dfa i = do
+--     _addState dfa =<< getState dfa i
 
 
 ----------------------------------------------------------------------
@@ -345,6 +368,11 @@ copy dfa i = do
 -- TODO: The functions below will probably "crash" when the element
 -- beeing inserted is already element of the DFA.  Or if we change
 -- value of existing state.  Check it.
+--
+-- Analysis:
+-- * Lookup is working, which suggests that state*, ingo* and free*
+--   components are correct.
+-- * printDFA doen't work -- contents of stateMap are incorrect!
 
 
 -- | Insert a (word, value) pair within a context of a state.
@@ -361,71 +389,69 @@ insert dfa xs y i = do
 -- TODO: Cut off computation when (j0 == j1).
 insertConfl :: DFA s -> [Sym] -> Val -> StateID -> ST s StateID
 
+
 -- CASE: Non-empty path.
+-- TODO: Cut off computation when j0 == j1.
 insertConfl dfa (x:xs) y i0 = do
     j0 <- getTrans dfa i0 x
     j1 <- Just <$> case j0 of
-        -- A child of a confluent state is also a confluent state.
         Just j  -> insertConfl dfa xs y j
         Nothing -> branch dfa xs y
     setTrans dfa i0 x j1
-    i1 <- lookupStateID dfa i0 >>= \case
-        Just i  -> i <$ incIngo dfa i
-        Nothing -> copy dfa i0
+    i1 <- addStateID dfa i0
     setTrans dfa i0 x j0
+    decIngo dfa i0
     return i1
 
+
 -- CASE: Empty path.
+-- TODO: Cut off computation when y0 == y1.
 insertConfl dfa [] y1 i0 = do
     y0 <- getValue dfa i0
     setValue dfa i0 $ Just y1
-    i1 <- lookupStateID dfa i0 >>= \case
-        Just i  -> i <$ incIngo dfa i
-        Nothing -> copy dfa i0
+    i1 <- addStateID dfa i0
     setValue dfa i0 y0
+    decIngo dfa i0
     return i1
 
 
 -- | Insert a (word, value) pair within a context of a non-confluent state.
--- TODO: Cut off computation when (j0 == j1)?
 insertNonConfl :: DFA s -> [Sym] -> Val -> StateID -> ST s StateID
 
+
 -- CASE: Non-empty path.
+-- TODO: Cut off computation when j0 == j1.
 insertNonConfl dfa (x:xs) y i0 = do
     j0 <- getTrans dfa i0 x
     j1 <- Just <$> case j0 of
         Just j  -> insert dfa xs y j
         Nothing -> branch dfa xs y
+    removeState dfa i0
     setTrans dfa i0 x j1
-    lookupStateID dfa i0 >>= \case
-        -- Before and after, the number of ingoing paths is equal to 1.
-        Nothing -> return i0
-        Just i  -> do
-            removeState dfa i0
-            i <$ incIngo dfa i
+    addStateID dfa i0
+
 
 -- CASE: Empty path.
+-- TODO: Cut off computation when y0 == y1.
 insertNonConfl dfa [] y1 i0 = do
-    y0 <- getValue dfa i0
+    _y0 <- getValue dfa i0
+    removeState dfa i0
     setValue dfa i0 $ Just y1
-    i1 <- lookupStateID dfa i0 >>= \case
-        Just i  -> i <$ incIngo dfa i
-        Nothing -> copy dfa i0
-    setValue dfa i0 y0
-    return i1
+    addStateID dfa i0
 
 
 -- | Insert a (word, value) pair under the assumption, that
 -- a state ID represents a DFA root.  In particular, ID
 -- of the root doen't change.
 insertRoot :: DFA s -> [Sym] -> Val -> StateID -> ST s ()
-insertRoot dfa [] y i = setValue dfa i $ Just y
-insertRoot dfa (x:xs) y i = do
-    j0 <- getTrans dfa i x
-    j1 <- Just <$> case j0 of
-        Just j  -> insert dfa xs y j
-        Nothing -> branch dfa xs y
-    setTrans dfa i x j1
+insertRoot dfa xs y i = void $ insertNonConfl dfa xs y i
+-- insertRoot dfa [] y i = setValue dfa i $ Just y
+-- insertRoot dfa (x:xs) y i = do
+--     j0 <- getTrans dfa i x
+--     j1 <- Just <$> case j0 of
+--         Just j  -> insert dfa xs y j
+--         Nothing -> branch dfa xs y
+--     setTrans dfa i x j1
 
 
 -- | Lookup a word in a DFA.
@@ -434,3 +460,18 @@ lookup dfa (x:xs) i = getTrans dfa i x >>= \case
     Nothing -> return Nothing
     Just j  -> lookup dfa xs j
 lookup dfa [] i     = getValue dfa i
+
+
+----------------------------------------------------------------------
+-- Printing
+----------------------------------------------------------------------
+
+
+-- | A helper DFA printing function.
+printDFA :: DFA RealWorld -> IO ()
+printDFA dfa = do
+    -- TODO: Print size of the left-language
+    DFA_State{..} <- stToIO $ readSTRef dfa
+    forM_ (M.toList stateMap) $ \(state, i) -> do
+        putStrLn $ "== " ++ show i ++ " =="
+        N.printState state

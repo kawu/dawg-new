@@ -11,6 +11,7 @@ module Data.DAWG.Dynamic.State
 , setValue
 , getTrans
 , setTrans
+, printState
 ) where
 
 
@@ -54,3 +55,10 @@ setTrans :: Sym -> Maybe StateID -> State -> State
 setTrans x mj st@State{..} = case mj of
     Nothing -> st { edgeMap = M.delete x edgeMap }
     Just j  -> st { edgeMap = M.insert x j edgeMap }
+
+
+-- | A helper state printing function.
+printState :: State -> IO ()
+printState State{..} = do
+    print value
+    mapM_ print (M.toList edgeMap)
