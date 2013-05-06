@@ -40,6 +40,10 @@ import           Data.DAWG.Dynamic.State (State)
 import qualified Data.DAWG.Dynamic.State as N
 import qualified Data.DAWG.Dynamic.Stack as P
 
+import           Debug.Trace (trace)
+
+
+
 ----------------------------------------------------------------------
 -- DFA state monad
 ----------------------------------------------------------------------
@@ -283,7 +287,7 @@ insertConfl dfa (x:xs) y i0 = do
         Just j  -> insertConfl dfa xs y j
         Nothing -> T.mapM (branch dfa xs) y
     if j0 == j1 then do
-        return Nothing
+        return (Just i0)
     else do
         setTrans dfa i0 x j1
         i1 <- usefulState dfa i0 `whenTrue` addStateID dfa i0
@@ -314,7 +318,7 @@ insertNonConfl dfa (x:xs) y i0 = do
         Just j  -> insert dfa xs y j
         Nothing -> T.mapM (branch dfa xs) y
     if j0 == j1 then do
-        return Nothing
+        return (Just i0)
     else do
         removeState dfa i0
         setTrans dfa i0 x j1
@@ -366,11 +370,11 @@ assocs dfa xs i () = runIdentityP $ do
     assocsHere = do
         mv <- lift $ getValue dfa i
         case mv of
-            Nothing -> return ()
-            Just v  -> respond (reverse xs, v)
+            Nothing -> trace "ret" $ return ()
+            Just v  -> trace "respond" $ respond (reverse xs, v)
     assocsLower = do
         u <- lift $ getState dfa i
-        sequence_
+        trace "lower" $ sequence_
             [ assocs dfa (x:xs) j ()
             | (x, j) <- M.toList (N.edgeMap u) ]
 
