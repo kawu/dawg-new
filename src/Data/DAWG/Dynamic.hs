@@ -1,3 +1,6 @@
+{-# LANGUAGE RecordWildCards #-}
+
+
 -- | The module implements /directed acyclic word graphs/ (DAWGs) internaly
 -- represented as /minimal acyclic deterministic finite-state automata/.
 -- The implementation provides fast insert and delete operations
@@ -10,15 +13,12 @@ module Data.DAWG.Dynamic
   DAWG
 
 -- * Query
--- , numStates
--- , numEdges
+, numStates
+, numEdges
 , lookup
 
 -- -- * Construction
 , empty
--- , fromList
--- , fromListWith
--- , fromLang
 
 -- ** Insertion
 , insert
@@ -27,10 +27,15 @@ module Data.DAWG.Dynamic
 -- ** Deletion
 , delete
 
--- -- * Conversion
--- , assocs
--- , keys
--- , elems
+-- * Conversion
+, assocs
+, keys
+, elems
+
+-- ** Lists
+, fromList
+, toList
+-- , fromListWith
 
 -- * Printing
 , printDAWG
@@ -39,10 +44,13 @@ module Data.DAWG.Dynamic
 
 import           Prelude hiding (lookup)
 import           Control.Monad.ST
+import           Control.Proxy
+import qualified Control.Proxy.Trans.Writer as W
 
 import           Data.DAWG.Dynamic.Types
 import qualified Data.DAWG.Dynamic.Internal as I
-import           Data.DAWG.Dynamic.Internal (DAWG, empty, printDAWG)
+import           Data.DAWG.Dynamic.Internal
+    (DAWG, empty, numStates, numEdges, printDAWG)
 
 
 -- | Insert (word, value) pair into the DAWG.
@@ -50,33 +58,6 @@ insert :: DAWG s -> [Sym] -> Val -> ST s ()
 insert dawg xs y = I.insertRoot (I.dfa dawg) xs (Just y) (I.root dawg)
 
 
--- | Remove word from the DAWG.
-delete :: DAWG s -> [Sym] -> ST s ()
-delete dawg xs = I.insertRoot (I.dfa dawg) xs Nothing (I.root dawg)
-
-
--- | Lookup a word in the automaton.
-lookup :: DAWG s -> [Sym] -> ST s (Maybe Val)
-lookup dawg xs = I.lookup (I.dfa dawg) xs (I.root dawg)
-
-
--- -- | Number of states in the automaton.
--- numStates :: DAWG a b -> Int
--- numStates = G.size . graph
--- 
--- -- | Number of edges in the automaton.
--- numEdges :: DAWG a b -> Int
--- numEdges = sum . map (length . N.edges) . G.nodes . graph
--- 
--- -- | Insert the (key, value) pair into the DAWG.
--- insert :: (Enum a, Ord b) => [a] -> b -> DAWG a b -> DAWG a b
--- insert xs' y d =
---     let xs = map fromEnum xs'
---         (i, g) = S.runState (insertM xs y $ root d) (graph d)
---     in  DAWG g i
--- {-# INLINE insert #-}
--- {-# SPECIALIZE insert :: Ord b => String -> b -> DAWG Char b -> DAWG Char b #-}
--- 
 -- -- | Insert with a function, combining new value and old value.
 -- -- 'insertWith' f key value d will insert the pair (key, value) into d if
 -- -- key does not exist in the DAWG. If the key does exist, the function
@@ -91,46 +72,46 @@ lookup dawg xs = I.lookup (I.dfa dawg) xs (I.root dawg)
 -- {-# SPECIALIZE insertWith
 --         :: Ord b => (b -> b -> b) -> String -> b
 --         -> DAWG Char b -> DAWG Char b #-}
--- 
--- -- | Delete the key from the DAWG.
--- delete :: (Enum a, Ord b) => [a] -> DAWG a b -> DAWG a b
--- delete xs' d =
---     let xs = map fromEnum xs'
---         (i, g) = S.runState (deleteM xs $ root d) (graph d)
---     in  DAWG g i
--- {-# SPECIALIZE delete :: Ord b => String -> DAWG Char b -> DAWG Char b #-}
--- 
--- -- | Find value associated with the key.
--- lookup :: (Enum a, Ord b) => [a] -> DAWG a b -> Maybe b
--- lookup xs' d =
---     let xs = map fromEnum xs'
---     in  S.evalState (lookupM xs $ root d) (graph d)
--- {-# SPECIALIZE lookup :: Ord b => String -> DAWG Char b -> Maybe b #-}
--- 
--- -- | Return all key/value pairs in the DAWG in ascending key order.
--- assocs :: (Enum a, Ord b) => DAWG a b -> [([a], b)]
--- assocs
---     = map (first (map toEnum))
---     . (assocsAcc <$> graph <*> root)
--- {-# SPECIALIZE assocs :: Ord b => DAWG Char b -> [(String, b)] #-}
--- 
--- -- | Return all keys of the DAWG in ascending order.
--- keys :: (Enum a, Ord b) => DAWG a b -> [[a]]
--- keys = map fst . assocs
--- {-# SPECIALIZE keys :: Ord b => DAWG Char b -> [String] #-}
--- 
--- -- | Return all elements of the DAWG in the ascending order of their keys.
--- elems :: Ord b => DAWG a b -> [b]
--- elems = map snd . (assocsAcc <$> graph <*> root)
--- 
--- -- | Construct DAWG from the list of (word, value) pairs.
--- fromList :: (Enum a, Ord b) => [([a], b)] -> DAWG a b
--- fromList xs =
---     let update t (x, v) = insert x v t
---     in  foldl' update empty xs
--- {-# INLINE fromList #-}
--- {-# SPECIALIZE fromList :: Ord b => [(String, b)] -> DAWG Char b #-}
--- 
+
+
+-- | Remove word from the DAWG.
+delete :: DAWG s -> [Sym] -> ST s ()
+delete dawg xs = I.insertRoot (I.dfa dawg) xs Nothing (I.root dawg)
+
+
+-- | Lookup a word in the automaton.
+lookup :: DAWG s -> [Sym] -> ST s (Maybe Val)
+lookup I.DAWG{..} xs = I.lookup dfa xs root
+
+
+-- | Return all key/value pairs in the DAWG in ascending key order.
+assocs :: Proxy p => DAWG s -> () -> Producer p ([Sym], Val) (ST s) ()
+assocs I.DAWG{..} = I.assocs dfa [] root
+
+
+-- | Return all keys of the DAWG in ascending order.
+keys :: Proxy p => DAWG s -> () -> Producer p [Sym] (ST s) ()
+keys dawg = assocs dawg >-> mapD fst
+
+
+-- | Return all elements of the DAWG in the ascending order of their keys.
+elems :: Proxy p => DAWG s -> () -> Producer p Val (ST s) ()
+elems dawg = assocs dawg >-> mapD snd
+
+
+-- | Construct DAWG from the list of (word, value) pairs.
+fromList :: [([Sym], Val)] -> ST s (DAWG s)
+fromList xs = do
+    dawg <- empty
+    mapM_ (uncurry $ insert dawg) xs
+    return dawg
+
+
+-- | A version of the `assocs` function which produces all values at once.
+toList :: DAWG s -> ST s [([Sym], Val)]
+toList dawg = runProxy $ W.execWriterK $ assocs dawg >-> toListD
+
+
 -- -- | Construct DAWG from the list of (word, value) pairs
 -- -- with a combining function.  The combining function is
 -- -- applied strictly.
@@ -143,9 +124,3 @@ lookup dawg xs = I.lookup (I.dfa dawg) xs (I.root dawg)
 -- {-# SPECIALIZE fromListWith
 --         :: Ord b => (b -> b -> b)
 --         -> [(String, b)] -> DAWG Char b #-}
--- 
--- -- | Make DAWG from the list of words.  Annotate each word with
--- -- the @()@ value.
--- fromLang :: Enum a => [[a]] -> DAWG a ()
--- fromLang xs = fromList [(x, ()) | x <- xs]
--- {-# SPECIALIZE fromLang :: [String] -> DAWG Char () #-}

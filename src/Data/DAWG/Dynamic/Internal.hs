@@ -14,7 +14,10 @@ module Data.DAWG.Dynamic.Internal
 
 -- * DAWG
 , DAWG (..)
+, numStates
+, numEdges
 , empty
+, assocs
 , printDAWG
 ) where
 
@@ -30,12 +33,12 @@ import qualified Data.Vector.Unboxed.Mutable as U
 import qualified Data.Map as M
 import           Data.STRef
 import           Control.Monad.ST
+import           Control.Proxy
 
 import           Data.DAWG.Dynamic.Types
 import           Data.DAWG.Dynamic.State (State)
 import qualified Data.DAWG.Dynamic.State as N
 import qualified Data.DAWG.Dynamic.Stack as P
-
 
 ----------------------------------------------------------------------
 -- DFA state monad
@@ -330,7 +333,8 @@ insertNonConfl dfa [] y1 i0 = do
 -- | Insert a (word, value) pair under the assumption, that
 -- a state ID represents a DFA root.  In particular, ID
 -- of the root doen't change.
--- TODO: Rename this function to insert?
+--
+-- Assumption: the root is not an element of the `stateMap`.
 insertRoot :: DFA s -> [Sym] -> Maybe Val -> StateID -> ST s ()
 insertRoot dfa (x:xs) y i0 = do
     j0 <- getTrans dfa i0 x
@@ -347,6 +351,28 @@ lookup dfa (x:xs) i = getTrans dfa i x >>= \case
     Nothing -> return Nothing
     Just j  -> lookup dfa xs j
 lookup dfa [] i     = getValue dfa i
+
+
+-- | Produce all key/value pairs present in a DFA rooted in a given state.
+-- Elements will be reported in an ascending order with respect to keys.
+-- To all resultant elements a given prefix will be concatenated.
+assocs
+    :: Proxy p => DFA s -> [Sym] -> StateID
+    -> () -> Producer p ([Sym], Val) (ST s) ()
+assocs dfa xs i () = runIdentityP $ do
+    assocsHere
+    assocsLower
+  where
+    assocsHere = do
+        mv <- lift $ getValue dfa i
+        case mv of
+            Nothing -> return ()
+            Just v  -> respond (reverse xs, v)
+    assocsLower = do
+        u <- lift $ getState dfa i
+        sequence_
+            [ assocs dfa (x:xs) j ()
+            | (x, j) <- M.toList (N.edgeMap u) ]
 
 
 ----------------------------------------------------------------------
@@ -375,6 +401,19 @@ empty = do
     return $ DAWG dfa i
 
 
+-- | Number of states in the automaton.
+numStates :: DAWG s -> ST s Int
+numStates DAWG{..} = (+1) . M.size . stateMap <$> readSTRef dfa
+
+
+-- | Number of edges in the automaton.
+numEdges :: DAWG s -> ST s Int
+numEdges DAWG{..} = do
+    xs <- M.keys . stateMap <$> readSTRef dfa
+    x  <- getState dfa root
+    return . sum $ map (M.size . N.edgeMap) (x : xs)
+
+
 ----------------------------------------------------------------------
 -- Printing
 ----------------------------------------------------------------------
@@ -383,10 +422,8 @@ empty = do
 -- | A helper DFA printing function.
 printDAWG :: DAWG RealWorld -> IO ()
 printDAWG DAWG{..} = do
-    -- TODO: Print size of the left-language
     DFAData{..} <- stToIO $ readSTRef dfa 
-
-    rootState <- stToIO $ getState dfa root
+    rootState   <- stToIO $ getState dfa root
     forM_ ((rootState, root) : M.toList stateMap) $ \(u, i) -> do
         putStrLn $ "== " ++ show i ++ " =="
         ingo <- stToIO $ getIngo dfa  i

@@ -24,7 +24,8 @@ library
       , binary
       , vector
       , vector-binary
-      -- , mtl
+      , pipes >= 3.2 && < 3.4
+      , mtl
 
     exposed-modules:
         Data.DAWG.Dynamic.Types
@@ -36,6 +37,14 @@ library
     other-modules:
 
     ghc-options: -Wall -O2
+
+test-suite tests
+    type:           exitcode-stdio-1.0
+    main-is:        Tests.hs
+    build-depends: 
+        base
+      , QuickCheck >= 2.6 && < 2.7
+    hs-source-dirs: tests src
 
 source-repository head
     type: git
