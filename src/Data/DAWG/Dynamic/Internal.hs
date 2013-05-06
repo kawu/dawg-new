@@ -40,9 +40,6 @@ import           Data.DAWG.Dynamic.State (State)
 import qualified Data.DAWG.Dynamic.State as N
 import qualified Data.DAWG.Dynamic.Stack as P
 
-import           Debug.Trace (trace)
-
-
 
 ----------------------------------------------------------------------
 -- DFA state monad
@@ -108,7 +105,8 @@ getState dfa i = do
     V.read us i
 
 
--- | Set state with a given identifier.
+-- | Set state with a given identifier.  The function doesn't update
+-- the `stateMap`.
 setState :: DFA s -> StateID -> State -> ST s ()
 setState dfa i u = do
     us <- stateVect <$> readSTRef dfa
@@ -186,7 +184,7 @@ getTrans dfa i x = N.getTrans x <$> getState dfa i
 
 
 -- | Set the outgoing transition.  Use `Nothing` to delete
--- the transition.
+-- the transition.  The function doesn't update the `stateMap`.
 setTrans :: DFA s -> StateID -> Sym -> Maybe StateID -> ST s ()
 setTrans dfa i x j = do
     u <- getState dfa i
@@ -198,7 +196,7 @@ getValue :: DFA s -> StateID -> ST s (Maybe Val)
 getValue dfa i = N.value <$> getState dfa i
 
 
--- | Set a state value.
+-- | Set a state value.  The function doesn't update the `stateMap`.
 setValue :: DFA s -> StateID -> Maybe Val -> ST s ()
 setValue dfa i y = do
     u <- getState dfa i
@@ -208,31 +206,39 @@ setValue dfa i y = do
 -- | Add new active state into the automaton.  If its already a member of
 -- the automaton, just increase the number of ingoing paths.  Otherwise,
 -- one of the inactive states will be used.
---
--- TODO: Rename to addState' or something similar.
-addState :: DFA s -> State -> ST s StateID
-addState dfa u = lookupState dfa u >>= \case
+addState' :: DFA s -> State -> ST s StateID
+addState' dfa u = lookupState dfa u >>= \case
     Nothing -> _addState dfa u
     Just i  -> i <$ incIngo dfa i
 
 
--- | Add new active state into the automaton.  If its already a member of
--- the automaton, just increase the number of ingoing paths.  Otherwise,
--- one of the inactive states will be used.
---
--- TODO: Rename to addState.
--- TODO: Maybe we should check here, it the state is useful?
+-- | Add new active state into the automaton, unless it is a useless state.
+-- If its already a member of the automaton, just increase the number of
+-- ingoing paths.  Otherwise, one of the inactive states will be used.
 --
 -- The function satisfies the following law:
--- (removeState dfa i >> addStateID dfa i) == return i
-addStateID :: DFA s -> StateID -> ST s StateID
-addStateID dfa i = getState dfa i >>= addState dfa
+-- (removeState dfa i >> addState dfa i) == return i
+-- unless the state under the @i@ ID is useless.
+addState :: DFA s -> StateID -> ST s (Maybe StateID)
+addState dfa i = usefulState dfa i `whenTrue`
+    (getState dfa i >>= addState' dfa)
+
+
+-- | Compute `Just` value when `True` or `Nothing` otherwise.
+whenTrue :: (Functor m, Monad m) => m Bool -> m a -> m (Maybe a)
+whenTrue mx m = do
+    x <- mx
+    if x 
+        then Just <$> m
+        else return Nothing
+{-# INLINE whenTrue #-}
 
 
 -- | Remove state from the automaton.
 --
 -- The function satisfies the following law:
--- (removeState dfa i >> addStateID dfa i) == return i
+-- (removeState dfa i >> addState dfa i) == return i
+-- unless the state under the @i@ ID is useless.
 removeState :: DFA s -> StateID -> ST s ()
 removeState dfa i = do
     dfaData@DFAData{..} <- readSTRef dfa
@@ -245,9 +251,9 @@ removeState dfa i = do
 branch :: DFA s -> [Sym] -> Val -> ST s StateID
 branch dfa (x:xs) y = do
     j <- branch dfa xs y
-    addState dfa $ N.state Nothing [(x, j)]
+    addState' dfa $ N.state Nothing [(x, j)]
 branch dfa [] y = do
-    addState dfa $ N.state (Just y) []
+    addState' dfa $ N.state (Just y) []
 
 
 ----------------------------------------------------------------------
@@ -257,81 +263,51 @@ branch dfa [] y = do
 
 -- | Insert a (word, value) pair within a context of a state.
 insert :: DFA s -> [Sym] -> Maybe Val -> StateID -> ST s (Maybe StateID)
-insert dfa xs y i = do
-    ingoNum <- getIngo dfa i
-    let doInsert = if ingoNum > 1
-            then insertConfl
-            else insertNonConfl
-    doInsert dfa xs y i
-
-
--- | Compute `Just` value when `True` or `Nothing` otherwise.
-whenTrue :: (Functor m, Monad m) => m Bool -> m a -> m (Maybe a)
-whenTrue mx m = do
-    x <- mx
-    if x 
-        then Just <$> m
-        else return Nothing
-
-
--- | Insert a (word, value) pair within a context of a confluent state.
--- TODO: Cut off computation when (j0 == j1).
-insertConfl :: DFA s -> [Sym] -> Maybe Val -> StateID -> ST s (Maybe StateID)
 
 
 -- CASE: Non-empty path.
--- TODO: Cut off computation when j0 == j1.
-insertConfl dfa (x:xs) y i0 = do
-    j0 <- getTrans dfa i0 x
-    j1 <- case j0 of
-        Just j  -> insertConfl dfa xs y j
-        Nothing -> T.mapM (branch dfa xs) y
-    if j0 == j1 then do
-        return (Just i0)
-    else do
-        setTrans dfa i0 x j1
-        i1 <- usefulState dfa i0 `whenTrue` addStateID dfa i0
-        setTrans dfa i0 x j0
-        decIngo dfa i0
-        return i1
-
-
--- CASE: Empty path.
--- TODO: Cut off computation when y0 == y1.
-insertConfl dfa [] y1 i0 = do
-    y0 <- getValue dfa i0
-    setValue dfa i0 y1
-    i1 <- usefulState dfa i0 `whenTrue` addStateID dfa i0
-    setValue dfa i0 y0
-    decIngo dfa i0
-    return i1
-
-
--- | Insert a (word, value) pair within a context of a non-confluent state.
-insertNonConfl :: DFA s -> [Sym] -> Maybe Val -> StateID -> ST s (Maybe StateID)
-
-
--- CASE: Non-empty path.
-insertNonConfl dfa (x:xs) y i0 = do
+insert dfa (x:xs) y i0 = do
     j0 <- getTrans dfa i0 x
     j1 <- case j0 of
         Just j  -> insert dfa xs y j
         Nothing -> T.mapM (branch dfa xs) y
-    if j0 == j1 then do
-        return (Just i0)
-    else do
-        removeState dfa i0
-        setTrans dfa i0 x j1
-        usefulState dfa i0 `whenTrue` addStateID dfa i0
+    ingo <- getIngo dfa i0
+    go j0 j1 ingo
+  where
+    go j0 j1 ingo
+        | j0 == j1  = do    -- Nothing to do
+            return (Just i0)
+        | ingo > 1  = do    -- A confluent state
+            setTrans dfa i0 x j1
+            i1 <- addState dfa i0
+            setTrans dfa i0 x j0
+            decIngo dfa i0
+            return i1
+        | otherwise = do    -- A non-confluent state
+            removeState dfa i0
+            setTrans dfa i0 x j1
+            addState dfa i0
 
 
 -- CASE: Empty path.
--- TODO: Cut off computation when y0 == y1.
-insertNonConfl dfa [] y1 i0 = do
-    _y0 <- getValue dfa i0
-    removeState dfa i0
-    setValue dfa i0 y1
-    usefulState dfa i0 `whenTrue` addStateID dfa i0
+insert dfa [] y1 i0 = do
+    y0 <- getValue dfa i0
+    ingo <- getIngo dfa i0
+    go y0 ingo
+  where
+    go y0 ingo
+        | y0 == y1  = do    -- Nothing to do
+            return (Just i0)
+        | ingo > 1  = do    -- A confluent state
+            setValue dfa i0 y1
+            i1 <- addState dfa i0
+            setValue dfa i0 y0
+            decIngo dfa i0
+            return i1
+        | otherwise = do    -- A non-confluent state
+            removeState dfa i0
+            setValue dfa i0 y1
+            addState dfa i0
 
 
 -- | Insert a (word, value) pair under the assumption, that
@@ -370,11 +346,11 @@ assocs dfa xs i () = runIdentityP $ do
     assocsHere = do
         mv <- lift $ getValue dfa i
         case mv of
-            Nothing -> trace "ret" $ return ()
-            Just v  -> trace "respond" $ respond (reverse xs, v)
+            Nothing -> return ()
+            Just v  -> respond (reverse xs, v)
     assocsLower = do
         u <- lift $ getState dfa i
-        trace "lower" $ sequence_
+        sequence_
             [ assocs dfa (x:xs) j ()
             | (x, j) <- M.toList (N.edgeMap u) ]
 
@@ -399,7 +375,7 @@ empty = do
         <*> P.empty
         <*> pure M.empty
     dfa  <- newSTRef dfaData
-    i    <- addState dfa N.empty
+    i    <- addState' dfa N.empty
     -- The root must not be in the state map.
     modifySTRef dfa $ \x -> x { stateMap = M.empty }
     return $ DAWG dfa i

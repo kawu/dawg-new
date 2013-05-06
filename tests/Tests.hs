@@ -7,15 +7,12 @@ import qualified Data.Map as M
 import           Data.DAWG.Dynamic.Types
 import qualified Data.DAWG.Dynamic as D
 
-import           Debug.Trace (trace)
-
-
 
 -- Input parameters.
 symNum  = 3     -- Number of distinct symbols.
 valNum  = 3     -- Number of distinct values.
-wordLen = 3     -- Word length (max).
-wordNum = 25    -- Number of words (max).
+wordLen = 5     -- Word length (max).
+wordNum = 50    -- Number of words (max).
 
 
 -- | An arbitrary symbol.
@@ -50,8 +47,6 @@ instance Arbitrary Input where
 -- | Property: the dictionary can be used like a map. 
 contentProp :: Input -> Bool
 contentProp (Input xs) =
-    trace (show m) $
-    trace (show d) $
     m == d
   where
     m = M.assocs (M.fromList xs)
