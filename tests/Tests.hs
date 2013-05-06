@@ -2,10 +2,12 @@ import           System.Exit (exitFailure)
 import           Control.Applicative ((<$>), (<*>))
 import           Control.Monad.ST
 import           Test.QuickCheck
+import qualified Data.Set as S
 import qualified Data.Map as M
 
 import           Data.DAWG.Dynamic.Types
 import qualified Data.DAWG.Dynamic as D
+import qualified Data.DAWG.Dynamic.Trie as Trie
 
 
 -- Input parameters.
@@ -44,13 +46,29 @@ instance Arbitrary Input where
         return $ Input (zip xs ys)
 
 
--- | Property: the dictionary can be used like a map. 
+-- | Property: a DAWG dictionary can be used like a map.
 contentProp :: Input -> Bool
 contentProp (Input xs) =
     m == d
   where
     m = M.assocs (M.fromList xs)
     d = runST $ D.toList =<< D.fromList xs
+
+
+-- | Property: there is one-to-one correspondence between DAWG states
+-- and trie subtrees.  Therefore, the size of the set of subtries should
+-- be equal to the size of the DAWG.
+minimalProp :: Input -> Bool
+minimalProp (Input xs) =
+    n == n' && e == e'
+  where
+    ts = S.fromList . Trie.subTries $ Trie.fromList xs
+
+    n  = runST $ D.numStates =<< D.fromList xs
+    n' = S.size ts
+
+    e  = runST $ D.numEdges =<< D.fromList xs
+    e' = sum $ map (M.size . Trie.edgeMap) (S.toList ts)
 
 
 -- | Check property and `exitFailure` on failure.
@@ -62,3 +80,4 @@ check prop = quickCheckResult prop >>= \x -> case x of
 main :: IO ()
 main = do
     check contentProp
+    check minimalProp
