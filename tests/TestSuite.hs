@@ -77,6 +77,7 @@ check prop = quickCheckResult prop >>= \x -> case x of
     Success _ _ _   -> return ()
     _               -> exitFailure
 
+
 main :: IO ()
 main = do
     check contentProp

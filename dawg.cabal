@@ -15,6 +15,7 @@ category:           Data, Data Structures
 homepage:           https://github.com/kawu/dawg-new
 build-type:         Simple
 
+
 library
     hs-source-dirs: src
     
@@ -38,15 +39,29 @@ library
     other-modules:
 
     ghc-options: -Wall -O2
+    
+
+source-repository head
+    type: git
+    location: https://github.com/kawu/dawg-new.git
+
 
 test-suite tests
     type:           exitcode-stdio-1.0
-    main-is:        Tests.hs
+    main-is:        TestSuite.hs
     build-depends: 
         base
       , QuickCheck >= 2.6 && < 2.7
     hs-source-dirs: tests src
 
-source-repository head
-    type: git
-    location: https://github.com/kawu/dawg-new.git
+
+benchmark build-bench
+    type:             exitcode-stdio-1.0
+    hs-source-dirs:   src, bench
+    main-is:          BuildBenchmarkSuite.hs
+    build-depends:
+        base
+      , criterion >= 0.6 && < 0.7
+      , statistics <= 0.10.3
+      , mwc-random
+    ghc-options:      -Wall -O2

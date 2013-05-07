@@ -28,9 +28,10 @@ module Data.DAWG.Dynamic
 , delete
 
 -- * Conversion
-, assocs
-, keys
-, elems
+
+-- ** Pipes
+, fromPipe
+, toPipe
 
 -- ** Lists
 , fromList
@@ -84,32 +85,41 @@ lookup :: DAWG s -> [Sym] -> ST s (Maybe Val)
 lookup I.DAWG{..} xs = I.lookup dfa xs root
 
 
+----------------------
+-- Pipes
+----------------------
+
+
+-- | Construct DAWG from a pipe producing (word, value) pairs.
+fromPipe :: (() -> Producer ProxyFast ([Sym], Val) (ST s) ()) -> ST s (DAWG s)
+fromPipe p = do
+    dawg <- empty
+    runProxy $ p >-> useD (uncurry $ insert dawg)
+    return dawg
+
+
 -- | Return all key/value pairs in the DAWG in ascending key order.
-assocs :: Proxy p => DAWG s -> () -> Producer p ([Sym], Val) (ST s) ()
-assocs I.DAWG{..} = I.assocs dfa [] root
+toPipe :: Proxy p => DAWG s -> () -> Producer p ([Sym], Val) (ST s) ()
+toPipe I.DAWG{..} = I.assocs dfa [] root
 
 
--- | Return all keys of the DAWG in ascending order.
-keys :: Proxy p => DAWG s -> () -> Producer p [Sym] (ST s) ()
-keys dawg = assocs dawg >-> mapD fst
-
-
--- | Return all elements of the DAWG in the ascending order of their keys.
-elems :: Proxy p => DAWG s -> () -> Producer p Val (ST s) ()
-elems dawg = assocs dawg >-> mapD snd
+----------------------
+-- Lists
+----------------------
 
 
 -- | Construct DAWG from the list of (word, value) pairs.
 fromList :: [([Sym], Val)] -> ST s (DAWG s)
-fromList xs = do
-    dawg <- empty
-    mapM_ (uncurry $ insert dawg) xs
-    return dawg
+fromList = fromPipe . fromListS
+-- fromList xs = do
+--     dawg <- empty
+--     mapM_ (uncurry $ insert dawg) xs
+--     return dawg
 
 
--- | A version of the `assocs` function which produces all values at once.
+-- | A version of the `toPipe` function which produces all values at once.
 toList :: DAWG s -> ST s [([Sym], Val)]
-toList dawg = runProxy $ W.execWriterK $ assocs dawg >-> toListD
+toList dawg = runProxy $ W.execWriterK $ toPipe dawg >-> toListD
 
 
 -- -- | Construct DAWG from the list of (word, value) pairs
