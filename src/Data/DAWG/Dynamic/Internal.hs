@@ -53,22 +53,28 @@ import qualified Data.DAWG.Dynamic.Stack as P
 --
 -- TODO: This representation is a bit inconsistent.  Some fields are
 -- represented directly (`stateVect`, `ingoVect`), other as pointers
--- (`freeStack`, `stateMap`).  Perhaps all fields should be stored
--- as pointers?  Then we could get rid of the `DFADAta`/`DFA`
--- distinction.
+-- (`freeStack`, `stateMap`).  Perhaps all fields should be stored as
+-- pointers?  Then we could get rid of the `DFAData`/`DFA` distinction.
 data DFAData s = DFAData {
+
     -- | A vector of DFA states (both active and inactive).  A position of
     -- a state in the vector represents its `StateID`.
+    -- TODO: Shouldn't we use an unboxed vector?  See issue #13.
       stateVect :: V.MVector s State
+
     -- | A number of ingoing paths (size of the left language)
     -- for each active state in the automaton.
     , ingoVect  :: U.MVector s Int32
+
     -- | A stack of free state slots, i.e. inactive states identifiers.
     , freeStack :: P.Stack s StateID
+
     -- | A map which is used to translate active states (with an exception
     -- of the root) to their corresponding identifiers.  Inactive states
     -- are not kept in the map.
-    , stateMap  :: M.Map State StateID }
+    , stateMap  :: M.Map State StateID
+
+    } deriving (Show)
 
 
 -- | A DFA reference.
@@ -247,7 +253,8 @@ removeState dfa i = do
     writeSTRef dfa $ dfaData { stateMap = stateMap' }
 
 
--- | Create a new branch in a DFA.
+-- | Create a new branch in a DFA.  TODO: Can we optimize it?
+-- Is it possible to create the entire branch at once?
 branch :: DFA s -> [Sym] -> Val -> ST s StateID
 branch dfa (x:xs) y = do
     j <- branch dfa xs y
