@@ -5,8 +5,8 @@ import           Criterion.Config
 import           Criterion.Main
 import           Control.Monad (replicateM, replicateM_)
 import           Control.Monad.ST
-import           Control.Proxy
-import qualified Control.Proxy.Trans.Writer as W
+import           Pipes
+import qualified Pipes.Prelude as P
 import qualified System.Random.MWC as R
 import           Data.DAWG.Dynamic.Types
 import qualified Data.DAWG.Dynamic as D
@@ -24,8 +24,8 @@ data Param = Param
 
 
 -- | A random dictionary producer given configuration.
-randomDict :: Proxy p => Param -> () -> Producer p ([Sym], Val) (ST s) ()
-randomDict Param{..} () = runIdentityP $ do
+randomDict :: Param -> Producer ([Sym], Val) (ST s) ()
+randomDict Param{..} = do
     gen <- lift R.create
     replicateM_ wordNum $ do
         -- Random word
@@ -34,15 +34,12 @@ randomDict Param{..} () = runIdentityP $ do
             replicateM n $ R.uniformR (1, symNum) gen
         -- Random value
         v <- lift $ R.uniformR (1, valNum) gen
-        respond (x, v)
+        yield (x, v)
 
 
 -- | A length of a random dictionary.
 randomLen :: Param -> Int
-randomLen prm
-    = getSum . snd
-    $ runST $ runProxy $ W.runWriterK
-    $ randomDict prm >-> lengthD
+randomLen prm = runST $ P.length $ randomDict prm
 
 
 -- | Build DAWG from a random dictionary and return the number of states.

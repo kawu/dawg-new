@@ -24,7 +24,6 @@ library
       , containers >= 0.4.1 && < 0.6
       , binary
       , vector
-      , vector-binary
       , pipes >= 4.0 && < 4.1
       , mtl
 
@@ -61,7 +60,7 @@ benchmark build-bench
     main-is:          BuildBenchmarkSuite.hs
     build-depends:
         base
-      , criterion >= 0.6 && < 0.7
-      , statistics <= 0.10.3
+      , criterion       >= 0.8          && < 0.9
+      , statistics      >= 0.10         && < 0.11
       , mwc-random
     ghc-options:      -Wall -O2
