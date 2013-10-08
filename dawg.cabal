@@ -25,7 +25,7 @@ library
       , binary
       , vector
       , vector-binary
-      , pipes >= 3.2 && < 3.4
+      , pipes >= 4.0 && < 4.1
       , mtl
 
     exposed-modules:

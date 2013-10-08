@@ -1,4 +1,4 @@
-{-# LANGUAGE LambdaCase #-}
+-- {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE DoAndIfThenElse #-}
 
@@ -33,7 +33,7 @@ import qualified Data.Vector.Unboxed.Mutable as U
 import qualified Data.Map as M
 import           Data.STRef
 import           Control.Monad.ST
-import           Control.Proxy
+import           Pipes
 
 import           Data.DAWG.Dynamic.Types
 import           Data.DAWG.Dynamic.State (State)
@@ -72,9 +72,7 @@ data DFAData s = DFAData {
     -- | A map which is used to translate active states (with an exception
     -- of the root) to their corresponding identifiers.  Inactive states
     -- are not kept in the map.
-    , stateMap  :: M.Map State StateID
-
-    } deriving (Show)
+    , stateMap  :: M.Map State StateID }
 
 
 -- | A DFA reference.
@@ -143,7 +141,7 @@ lookupState dfa u = M.lookup u . stateMap <$> readSTRef dfa
 _addState :: DFA s -> State -> ST s StateID
 _addState dfa u = do
     free <- freeStack <$> readSTRef dfa
-    i <- P.pop free >>= \case
+    i <- P.pop free >>= \mi -> case mi of
         Just i  -> return i
         Nothing -> do
             grow dfa
@@ -213,7 +211,7 @@ setValue dfa i y = do
 -- the automaton, just increase the number of ingoing paths.  Otherwise,
 -- one of the inactive states will be used.
 addState' :: DFA s -> State -> ST s StateID
-addState' dfa u = lookupState dfa u >>= \case
+addState' dfa u = lookupState dfa u >>= \mi -> case mi of
     Nothing -> _addState dfa u
     Just i  -> i <$ incIngo dfa i
 
@@ -334,7 +332,7 @@ insertRoot dfa [] y1 i0 = setValue dfa i0 y1
 
 -- | Lookup a word in a DFA.
 lookup :: DFA s -> [Sym] -> StateID -> ST s (Maybe Val)
-lookup dfa (x:xs) i = getTrans dfa i x >>= \case
+lookup dfa (x:xs) i = getTrans dfa i x >>= \mj -> case mj of
     Nothing -> return Nothing
     Just j  -> lookup dfa xs j
 lookup dfa [] i     = getValue dfa i
@@ -343,10 +341,8 @@ lookup dfa [] i     = getValue dfa i
 -- | Produce all key/value pairs present in a DFA rooted in a given state.
 -- Elements will be reported in an ascending order with respect to keys.
 -- To all resultant elements a given prefix will be concatenated.
-assocs
-    :: Proxy p => DFA s -> [Sym] -> StateID
-    -> () -> Producer p ([Sym], Val) (ST s) ()
-assocs dfa xs i () = runIdentityP $ do
+assocs :: DFA s -> [Sym] -> StateID -> Producer ([Sym], Val) (ST s) ()
+assocs dfa xs i = do
     assocsHere
     assocsLower
   where
@@ -354,11 +350,11 @@ assocs dfa xs i () = runIdentityP $ do
         mv <- lift $ getValue dfa i
         case mv of
             Nothing -> return ()
-            Just v  -> respond (reverse xs, v)
+            Just v  -> yield (reverse xs, v)
     assocsLower = do
         u <- lift $ getState dfa i
         sequence_
-            [ assocs dfa (x:xs) j ()
+            [ assocs dfa (x:xs) j
             | (x, j) <- M.toList (N.edgeMap u) ]
 
 

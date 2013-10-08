@@ -45,8 +45,10 @@ module Data.DAWG.Dynamic
 
 import           Prelude hiding (lookup)
 import           Control.Monad.ST
-import           Control.Proxy
-import qualified Control.Proxy.Trans.Writer as W
+import           Pipes
+import           Pipes.Prelude (toListM)
+-- import qualified Pipes as P
+-- import qualified Control.Proxy.Trans.Writer as W
 
 import           Data.DAWG.Dynamic.Types
 import qualified Data.DAWG.Dynamic.Internal as I
@@ -91,15 +93,16 @@ lookup I.DAWG{..} xs = I.lookup dfa xs root
 
 
 -- | Construct DAWG from a pipe producing (word, value) pairs.
-fromPipe :: (() -> Producer ProxyFast ([Sym], Val) (ST s) ()) -> ST s (DAWG s)
+fromPipe :: Producer ([Sym], Val) (ST s) () -> ST s (DAWG s)
 fromPipe p = do
     dawg <- empty
-    runProxy $ p >-> useD (uncurry $ insert dawg)
+    runEffect $ for p $ \(key, val) -> do
+        lift $ insert dawg key val
     return dawg
 
 
 -- | Return all key/value pairs in the DAWG in ascending key order.
-toPipe :: Proxy p => DAWG s -> () -> Producer p ([Sym], Val) (ST s) ()
+toPipe :: DAWG s -> Producer ([Sym], Val) (ST s) ()
 toPipe I.DAWG{..} = I.assocs dfa [] root
 
 
@@ -110,16 +113,16 @@ toPipe I.DAWG{..} = I.assocs dfa [] root
 
 -- | Construct DAWG from the list of (word, value) pairs.
 fromList :: [([Sym], Val)] -> ST s (DAWG s)
-fromList = fromPipe . fromListS
--- fromList xs = do
---     dawg <- empty
---     mapM_ (uncurry $ insert dawg) xs
---     return dawg
+-- fromList = fromPipe . fromListS
+fromList xs = do
+    dawg <- empty
+    mapM_ (uncurry $ insert dawg) xs
+    return dawg
 
 
 -- | A version of the `toPipe` function which produces all values at once.
 toList :: DAWG s -> ST s [([Sym], Val)]
-toList dawg = runProxy $ W.execWriterK $ toPipe dawg >-> toListD
+toList dawg = toListM $ toPipe dawg
 
 
 -- -- | Construct DAWG from the list of (word, value) pairs

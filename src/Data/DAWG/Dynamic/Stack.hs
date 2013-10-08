@@ -18,8 +18,7 @@ import qualified Data.Vector.Unboxed.Mutable as U
 -- | TODO: Perhaps we should use unboxed tuple here?
 data State s a = State
     { body  :: U.MVector s a
-    , size  :: Int
-    } deriving (Show)
+    , size  :: Int }
 
 
 -- | A stack of unboxed values.
