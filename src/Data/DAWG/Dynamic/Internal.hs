@@ -1,4 +1,3 @@
--- {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE DoAndIfThenElse #-}
 
@@ -111,6 +110,11 @@ getState dfa i = do
 
 -- | Set state with a given identifier.  The function doesn't update
 -- the `stateMap`.
+--
+-- Question: is the state under the given ID an empty state?
+-- Idea: if `State` was mutable, it would be possible (necessary?)
+-- to copy all data to the state under the given ID.  No harm in that,
+-- it seems.
 setState :: DFA s -> StateID -> State -> ST s ()
 setState dfa i u = do
     us <- stateVect <$> readSTRef dfa
@@ -138,8 +142,8 @@ lookupState dfa u = M.lookup u . stateMap <$> readSTRef dfa
 
 -- | Add new state into the automaton.  The function assumes,
 -- that the state is not a member of the automaton.
-_addState :: DFA s -> State -> ST s StateID
-_addState dfa u = do
+addNewState :: DFA s -> State -> ST s StateID
+addNewState dfa u = do
     free <- freeStack <$> readSTRef dfa
     i <- P.pop free >>= \mi -> case mi of
         Just i  -> return i
@@ -160,9 +164,9 @@ _addState dfa u = do
 ----------------------------------------------------------------------
 
 
--- | It the state "useful"?
-usefulState :: DFA s -> StateID -> ST s Bool
-usefulState dfa i = not . N.null <$> getState dfa i
+-- | It the state non-empty?
+nonEmptyState :: DFA s -> StateID -> ST s Bool
+nonEmptyState dfa i = not . N.null <$> getState dfa i
 
 
 -- | Incerement the number of ingoing paths for a given state.
@@ -210,22 +214,24 @@ setValue dfa i y = do
 -- | Add new active state into the automaton.  If its already a member of
 -- the automaton, just increase the number of ingoing paths.  Otherwise,
 -- one of the inactive states will be used.
-addState' :: DFA s -> State -> ST s StateID
-addState' dfa u = lookupState dfa u >>= \mi -> case mi of
-    Nothing -> _addState dfa u
+forceAddState :: DFA s -> State -> ST s StateID
+forceAddState dfa u = lookupState dfa u >>= \mi -> case mi of
+    Nothing -> addNewState dfa u
     Just i  -> i <$ incIngo dfa i
 
 
--- | Add new active state into the automaton, unless it is a useless state.
--- If its already a member of the automaton, just increase the number of
+-- | Add new active state into the automaton, unless it is an empty state
+-- (there's no point in adding the empty state to the automaton; the given
+-- state can be empty e.g. within the context of the `insert` function).
+-- If it's already a member of the automaton, just increase the number of
 -- ingoing paths.  Otherwise, one of the inactive states will be used.
 --
 -- The function satisfies the following law:
 -- (removeState dfa i >> addState dfa i) == return i
--- unless the state under the @i@ ID is useless.
+-- unless the state under the @i@ ID is empty.
 addState :: DFA s -> StateID -> ST s (Maybe StateID)
-addState dfa i = usefulState dfa i `whenTrue`
-    (getState dfa i >>= addState' dfa)
+addState dfa i = nonEmptyState dfa i `whenTrue`
+    (getState dfa i >>= forceAddState dfa)
 
 
 -- | Compute `Just` value when `True` or `Nothing` otherwise.
@@ -242,7 +248,7 @@ whenTrue mx m = do
 --
 -- The function satisfies the following law:
 -- (removeState dfa i >> addState dfa i) == return i
--- unless the state under the @i@ ID is useless.
+-- unless the state under the @i@ ID is empty.
 removeState :: DFA s -> StateID -> ST s ()
 removeState dfa i = do
     dfaData@DFAData{..} <- readSTRef dfa
@@ -256,9 +262,9 @@ removeState dfa i = do
 branch :: DFA s -> [Sym] -> Val -> ST s StateID
 branch dfa (x:xs) y = do
     j <- branch dfa xs y
-    addState' dfa $ N.state Nothing [(x, j)]
+    forceAddState dfa $ N.state Nothing [(x, j)]
 branch dfa [] y = do
-    addState' dfa $ N.state (Just y) []
+    forceAddState dfa $ N.state (Just y) []
 
 
 ----------------------------------------------------------------------
@@ -283,6 +289,7 @@ insert dfa (x:xs) y i0 = do
         | j0 == j1  = do    -- Nothing to do
             return (Just i0)
         | ingo > 1  = do    -- A confluent state
+            -- TODO: perhaps it could be done in a more bracket-like style?
             setTrans dfa i0 x j1
             i1 <- addState dfa i0
             setTrans dfa i0 x j0
@@ -378,8 +385,8 @@ empty = do
         <*> P.empty
         <*> pure M.empty
     dfa  <- newSTRef dfaData
-    i    <- addState' dfa N.empty
-    -- The root must not be in the state map.
+    i    <- forceAddState dfa N.empty
+    -- The root must not be in the state map (see the `insertRoot` function).
     modifySTRef dfa $ \x -> x { stateMap = M.empty }
     return $ DAWG dfa i
 
