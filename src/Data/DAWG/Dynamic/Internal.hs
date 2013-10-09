@@ -27,12 +27,15 @@ import           Control.Monad (forM_, unless)
 import           Data.Int (Int32)
 import           Data.Maybe (fromJust)
 import qualified Data.Traversable as T
-import qualified Data.Vector.Mutable as V
+import qualified Data.Vector as V
+import qualified Data.Vector.Mutable as VM
 import qualified Data.Vector.Unboxed.Mutable as U
 import qualified Data.Map as M
 import           Data.STRef
 import           Control.Monad.ST
 import           Pipes
+import qualified Pipes.Prelude as P
+-- import           Pipes.Parse
 
 import           Data.DAWG.Dynamic.Types
 import           Data.DAWG.Dynamic.State (State)
@@ -59,7 +62,7 @@ data DFAData s = DFAData {
     -- | A vector of DFA states (both active and inactive).  A position of
     -- a state in the vector represents its `StateID`.
     -- TODO: Shouldn't we use an unboxed vector?  See issue #13.
-      stateVect :: V.MVector s State
+      stateVect :: V.Vector (State s)
 
     -- | A number of ingoing paths (size of the left language)
     -- for each active state in the automaton.
@@ -71,7 +74,7 @@ data DFAData s = DFAData {
     -- | A map which is used to translate active states (with an exception
     -- of the root) to their corresponding identifiers.  Inactive states
     -- are not kept in the map.
-    , stateMap  :: M.Map State StateID }
+    , stateMap  :: M.Map (State s) StateID }
 
 
 -- | A DFA reference.
@@ -90,8 +93,8 @@ grow dfa = do
     let n = V.length stateVect
 
     -- Use n+1 to handle empty dfa.
-    stateVect' <- V.grow stateVect (n + 1)
-    ingoVect'  <- U.grow ingoVect  (n + 1)
+    stateVect' <- growVector stateVect (n+1) N.empty
+    ingoVect'  <- U.grow ingoVect (n+1)
     writeSTRef dfa $ dfaData
         { stateVect = stateVect'
         , ingoVect  = ingoVect' }
@@ -101,24 +104,36 @@ grow dfa = do
         P.push i freeStack
 
 
+-- | Grow an immutable boxed vector by a given number of monadic `a` elements.
+-- TODO: Check if it is efficient enough (especially since we are using mutable
+-- boxed vector for temporary storage here; maybe list would be sufficient and
+-- more safe?).
+growVector :: V.Vector a -> Int -> ST s a -> ST s (V.Vector a)
+growVector v k mx = do
+    let n = V.length v
+    mv <- V.unsafeThaw v >>= flip VM.grow k
+    forM_ [n, n+1 .. n+k-1] $ \i -> do
+        VM.unsafeWrite mv i =<< mx
+    V.unsafeFreeze mv
+
+
+-- | TODO: can try unsafe indexing for efficiency reasons.
+
+
 -- | Retrieve state with a given identifier.
-getState :: DFA s -> StateID -> ST s State
+getState :: DFA s -> StateID -> ST s (State s)
 getState dfa i = do
-    us <- stateVect <$> readSTRef dfa
-    V.read us i
+    (V.! i) . stateVect <$> readSTRef dfa
 
 
--- | Set state with a given identifier.  The function doesn't update
+-- | Put state under the given identifier.  The function doesn't update
 -- the `stateMap`.
 --
 -- Question: is the state under the given ID an empty state?
--- Idea: if `State` was mutable, it would be possible (necessary?)
--- to copy all data to the state under the given ID.  No harm in that,
--- it seems.
-setState :: DFA s -> StateID -> State -> ST s ()
-setState dfa i u = do
-    us <- stateVect <$> readSTRef dfa
-    V.write us i u
+setState :: DFA s -> StateID -> State s -> ST s ()
+setState dfa i u = getState dfa i >>= flip N.overwrite u
+--     us <- stateVect <$> readSTRef dfa
+--     V.write us i u
 
 
 -- | Get a number of ingoing paths for a given state.
@@ -136,13 +151,13 @@ setIngo dfa i x = do
 
 
 -- | Lookup state identifier in a DFA.
-lookupState :: DFA s -> State -> ST s (Maybe StateID)
+lookupState :: DFA s -> State s -> ST s (Maybe StateID)
 lookupState dfa u = M.lookup u . stateMap <$> readSTRef dfa
 
 
 -- | Add new state into the automaton.  The function assumes,
 -- that the state is not a member of the automaton.
-addNewState :: DFA s -> State -> ST s StateID
+addNewState :: DFA s -> State s -> ST s StateID
 addNewState dfa u = do
     free <- freeStack <$> readSTRef dfa
     i <- P.pop free >>= \mi -> case mi of
@@ -165,8 +180,8 @@ addNewState dfa u = do
 
 
 -- | It the state non-empty?
-nonEmptyState :: DFA s -> StateID -> ST s Bool
-nonEmptyState dfa i = not . N.null <$> getState dfa i
+emptyState :: DFA s -> StateID -> ST s Bool
+emptyState dfa i = N.null =<< getState dfa i
 
 
 -- | Incerement the number of ingoing paths for a given state.
@@ -188,7 +203,7 @@ decIngo dfa i = do
 -- | Get the outgoing transition.  Return `Nothin` if there is
 -- no transition on a given symbol.
 getTrans :: DFA s -> StateID -> Sym -> ST s (Maybe StateID)
-getTrans dfa i x = N.getTrans x <$> getState dfa i
+getTrans dfa i x = N.getTrans x =<< getState dfa i
 
 
 -- | Set the outgoing transition.  Use `Nothing` to delete
@@ -196,25 +211,25 @@ getTrans dfa i x = N.getTrans x <$> getState dfa i
 setTrans :: DFA s -> StateID -> Sym -> Maybe StateID -> ST s ()
 setTrans dfa i x j = do
     u <- getState dfa i
-    setState dfa i $ N.setTrans x j u
+    N.setTrans x j u
 
 
 -- | Get a state value.
 getValue :: DFA s -> StateID -> ST s (Maybe Val)
-getValue dfa i = N.value <$> getState dfa i
+getValue dfa i = N.getValue =<< getState dfa i
 
 
 -- | Set a state value.  The function doesn't update the `stateMap`.
 setValue :: DFA s -> StateID -> Maybe Val -> ST s ()
 setValue dfa i y = do
     u <- getState dfa i
-    setState dfa i $ N.setValue y u
+    N.setValue y u
 
 
 -- | Add new active state into the automaton.  If its already a member of
 -- the automaton, just increase the number of ingoing paths.  Otherwise,
 -- one of the inactive states will be used.
-forceAddState :: DFA s -> State -> ST s StateID
+forceAddState :: DFA s -> State s -> ST s StateID
 forceAddState dfa u = lookupState dfa u >>= \mi -> case mi of
     Nothing -> addNewState dfa u
     Just i  -> i <$ incIngo dfa i
@@ -230,18 +245,18 @@ forceAddState dfa u = lookupState dfa u >>= \mi -> case mi of
 -- (removeState dfa i >> addState dfa i) == return i
 -- unless the state under the @i@ ID is empty.
 addState :: DFA s -> StateID -> ST s (Maybe StateID)
-addState dfa i = nonEmptyState dfa i `whenTrue`
+addState dfa i = emptyState dfa i `whenFalse`
     (getState dfa i >>= forceAddState dfa)
 
 
 -- | Compute `Just` value when `True` or `Nothing` otherwise.
-whenTrue :: (Functor m, Monad m) => m Bool -> m a -> m (Maybe a)
-whenTrue mx m = do
+whenFalse :: (Functor m, Monad m) => m Bool -> m a -> m (Maybe a)
+whenFalse mx m = do
     x <- mx
     if x 
-        then Just <$> m
-        else return Nothing
-{-# INLINE whenTrue #-}
+        then return Nothing
+        else Just <$> m
+{-# INLINE whenFalse #-}
 
 
 -- | Remove state from the automaton.
@@ -262,9 +277,9 @@ removeState dfa i = do
 branch :: DFA s -> [Sym] -> Val -> ST s StateID
 branch dfa (x:xs) y = do
     j <- branch dfa xs y
-    forceAddState dfa $ N.state Nothing [(x, j)]
+    forceAddState dfa =<< N.state Nothing [(x, j)]
 branch dfa [] y = do
-    forceAddState dfa $ N.state (Just y) []
+    forceAddState dfa =<< N.state (Just y) []
 
 
 ----------------------------------------------------------------------
@@ -360,9 +375,11 @@ assocs dfa xs i = do
             Just v  -> yield (reverse xs, v)
     assocsLower = do
         u <- lift $ getState dfa i
-        sequence_
-            [ assocs dfa (x:xs) j
-            | (x, j) <- M.toList (N.edgeMap u) ]
+        for (N.transProd u) $ \(x, j) -> do
+            assocs dfa (x:xs) j
+--         sequence_
+--             [ assocs dfa (x:xs) j
+--             | (x, j) <- M.toList (N.edgeMap u) ]
 
 
 ----------------------------------------------------------------------
@@ -380,12 +397,12 @@ data DAWG s = DAWG
 empty :: ST s (DAWG s)
 empty = do
     dfaData <- DFAData
-        <$> V.new 0
+        <$> pure V.empty
         <*> U.new 0
         <*> P.empty
         <*> pure M.empty
     dfa  <- newSTRef dfaData
-    i    <- forceAddState dfa N.empty
+    i    <- forceAddState dfa =<< N.empty
     -- The root must not be in the state map (see the `insertRoot` function).
     modifySTRef dfa $ \x -> x { stateMap = M.empty }
     return $ DAWG dfa i
@@ -401,7 +418,14 @@ numEdges :: DAWG s -> ST s Int
 numEdges DAWG{..} = do
     xs <- M.keys . stateMap <$> readSTRef dfa
     x  <- getState dfa root
-    return . sum $ map (M.size . N.edgeMap) (x : xs)
+    -- return . sum $ map (M.size . N.edgeMap) (x : xs)
+    P.length $ mapM_ N.transProd (x:xs)
+
+-- sumP :: (Monad m, Num a) => StateT (Producer a m r) m a
+-- sumP = loop 0 where
+--     loop x = draw >>= either
+--         (\_ -> return x)
+--         (\y -> loop $! x + y)
 
 
 ----------------------------------------------------------------------

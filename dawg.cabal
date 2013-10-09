@@ -20,11 +20,12 @@ library
     hs-source-dirs: src
     
     build-depends:
-        base >= 4 && < 5
-      , containers >= 0.4.1 && < 0.6
+        base            >= 4        && < 5
+      , containers      >= 0.4.1    && < 0.6
       , binary
       , vector
-      , pipes >= 4.0 && < 4.1
+      , pipes           >= 4.0      && < 4.1
+      -- , pipes-parse     >= 2.0      && < 2.1
       , mtl
 
     exposed-modules:
