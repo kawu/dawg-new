@@ -5,28 +5,46 @@
 -- | Implementation of a transition map build on top of the "M.Map" container.
 
 
-module Data.DAWG.State.EdgeMap.Map
+module Data.DAWG.Dynamic.State.EdgeMap.Map
 ( EdgeMap
+, EdgeMapI
+, unsafeFreeze
+, unsafeThaw
 ) where
 
 
 import           Prelude hiding (lookup)
 import           Control.Applicative ((<$>), (<*>))
+import           Control.Monad.ST
 import           Data.STRef
 import qualified Data.Map as M
+import           Pipes
 
-import           Data.DAWG.Types
-import qualified Data.DAWG.State.EdgeMap as E
+import           Data.DAWG.Dynamic.Types
+import qualified Data.DAWG.Dynamic.State.EdgeMap as E
 
 
--- | A vector of distinct key/value pairs strictly ascending with respect
--- to key values.
+-- | A pure, immutable version of the transition map.
+newtype EdgeMapI = EdgeMapI (M.Map Sym StateID)
+    deriving (Eq, Ord)
+
+
+-- | An ST version of transition map.
 newtype EdgeMap s = EdgeMap
-    { edgeMapRef :: STRef s (M.Map Sym StateID)
-    } deriving (Show, Eq, Ord)
+    {edgeMapRef :: STRef s (M.Map Sym StateID)}
 
 
-instance C.Trans Trans where
+-- | Translate map to its pure version.
+unsafeFreeze :: EdgeMap s -> ST s EdgeMapI
+unsafeFreeze EdgeMap{..} = EdgeMapI <$> readSTRef edgeMapRef
+
+
+-- | Translate map to its ST version.
+unsafeThaw :: EdgeMapI -> ST s (EdgeMap s)
+unsafeThaw (EdgeMapI edgeMap) = EdgeMap <$> newSTRef edgeMap
+
+
+instance E.EdgeMap EdgeMap where
     empty = EdgeMap <$> newSTRef M.empty
     {-# INLINE empty #-}
 

@@ -10,17 +10,18 @@ module Data.DAWG.Dynamic.State
   State (..)
 , empty
 , null
-, state
+, mkValue
+, mkEdge
 , getValue
 , setValue
 , getTrans
 , setTrans
 , edgeProd
-, overwrite
--- * State (pure)
-, StateP (..)
-, fromPure
-, toPure
+-- , overwrite
+-- * State (imutable)
+, StateI (..)
+, unsafeThaw
+, unsafeFreeze
 , printState
 ) where
 
@@ -35,8 +36,8 @@ import           Pipes
 import           Data.DAWG.Dynamic.Types
 
 -- Choice of the low-level transition representation.
-import           Data.DAWG.Dynamic.EdgeMap.Map (EdgeMap)
-import qualified Data.DAWG.Dynamic.EdgeMap as E
+import           Data.DAWG.Dynamic.State.EdgeMap.Map
+import qualified Data.DAWG.Dynamic.State.EdgeMap as E
 
 
 ---------------------------------------------------
@@ -103,45 +104,44 @@ edgeProd :: State s -> Producer (Sym, StateID) (ST s) ()
 edgeProd State{..} = E.toProd edgeMap
 
 
--- | Overwrite the contents of the first state with the contents
--- of the second state.
-overwrite :: State s -> State s -> ST s ()
-overwrite State{..} src = do
-    StateP{..} <- toPure src
-    writeSTRef valueRef value
-    writeSTRef edgeMapRef edgeMap
+-- -- | Overwrite the contents of the first state with the contents
+-- -- of the second state.
+-- overwrite :: State s -> State s -> ST s ()
+-- overwrite State{..} src = do
+--     StateP{..} <- unsafeFreeze src
+--     writeSTRef valueRef value
+--     writeSTRef edgeMapRef edgeMap
 
 
--- ---------------------------------------------------
--- -- Pure version of a state
--- ---------------------------------------------------
--- 
--- 
--- -- | A pure version of a state.
--- data StateP = StateP {
---     -- | A (maybe) value kept in the state.
---       value     :: Maybe Val
---     -- | A map of outgoing edges.  TODO: make some real
---     -- implementation here.
---     , edgeMap   :: M.Map Sym StateID
---     } deriving (Show, Eq, Ord)
--- 
--- 
--- -- | Translate state to its pure version.
--- fromPure :: StateP -> ST s (State s)
--- fromPure StateP{..} = State <$> newSTRef value <*> newSTRef edgeMap
--- 
--- 
--- -- | Translate state to its pure version.
--- toPure :: State s -> ST s StateP
--- toPure State{..} = StateP <$> readSTRef valueRef <*> readSTRef edgeMapRef
--- 
--- 
--- -- | A helper state printing function.
--- printState :: StateP -> IO ()
--- printState StateP{..} = do
---     putStr "value:\t" >> print value
---     mapM_ print (M.toList edgeMap)
+---------------------------------------------------
+-- Pure version of a state
+---------------------------------------------------
+
+
+-- | A pure version of a state.
+data StateI = StateI {
+    -- | A (maybe) value kept in the state.
+      value     :: Maybe Val
+    -- | A map of outgoing edges.
+    , edgeMap   :: EdgeMapI
+    } deriving (Show, Eq, Ord)
+
+
+-- | Translate state to its pure version.
+unsafeThaw :: StateP -> ST s (State s)
+unsafeThaw StateP{..} = State <$> newSTRef value <*> newSTRef edgeMap
+
+
+-- | Translate state to its pure version.
+unsafeFreeze :: State s -> ST s StateP
+unsafeFreeze State{..} = StateP <$> readSTRef valueRef <*> readSTRef edgeMapRef
+
+
+-- | A helper state printing function.
+printState :: StateP -> IO ()
+printState StateP{..} = do
+    putStr "value:\t" >> print value
+    mapM_ print (M.toList edgeMap)
 
 
 ---------------------------------------------------

@@ -2,7 +2,7 @@
 -- from alphabet symbols to state identifiers.
 
 
-module Data.DAWG.State.EdgeMap
+module Data.DAWG.Dynamic.State.EdgeMap
 ( EdgeMap (..)
 ) where
 
@@ -10,7 +10,7 @@ module Data.DAWG.State.EdgeMap
 import           Control.Monad.ST
 import           Pipes
 
-import           Data.DAWG.Types
+import           Data.DAWG.Dynamic.Types
 
 
 -- | Abstraction over transition maps from alphabet symbols
@@ -21,7 +21,7 @@ class EdgeMap t where
     -- | Single-element transition map.
     singleton   :: Sym -> StateID -> ST s (t s)
     -- | Is the map empty?
-    null        :: ST s Bool
+    null        :: t s -> ST s Bool
     -- | Lookup symbol in the map.
     lookup      :: Sym -> t s -> ST s (Maybe StateID)
     -- | Insert element to the map.
@@ -30,6 +30,10 @@ class EdgeMap t where
     delete      :: Sym -> t s -> ST s ()
     -- | Translate map into a producer.
     toProd      :: t s -> Producer (Sym, StateID) (ST s) ()
+
+
+-- -- | A pure version of 
+-- class (Eq t, Ord t) => EdgeMapP t where
 
 
 --     -- | Find index of the symbol.

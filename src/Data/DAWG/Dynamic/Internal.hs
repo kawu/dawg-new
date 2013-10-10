@@ -43,7 +43,7 @@ import qualified Pipes.Prelude as P
 -- import           Pipes.Parse
 
 import           Data.DAWG.Dynamic.Types
-import           Data.DAWG.Dynamic.State (State, StateP)
+import           Data.DAWG.Dynamic.State (State, StateI)
 import qualified Data.DAWG.Dynamic.State as N
 import qualified Data.DAWG.Dynamic.Stack as P
 
@@ -310,6 +310,18 @@ insert dfa (x:xs) y i0 = do
             return (Just i0)
         | ingo > 1  = do    -- A confluent state
             -- TODO: perhaps it could be done in a more bracket-like style?
+            -- BEWARE: we are doing something unsafe here!  The change of the
+            -- state value, which takes place here witin the ST monad, can lead
+            -- to an analogous change of state within the (State -> StateID)
+            -- map, which is supposed to be pure!  It derives from the fact,
+            -- that we are (possibly) using the unsafeFreeze function before
+            -- puting states into the (State -> StateID) map.  Is it "safe"
+            -- to do that?
+            --
+            -- IDEA: maybe we could just put into the map states which were
+            -- freezed in a safe way?  Why do we even need the unsafeFreeze
+            -- here?  Or, in other words, what is the precise place were we
+            -- should be using the unsafe version of state-freeze?
             setTrans dfa i0 x j1
             i1 <- addState dfa i0
             setTrans dfa i0 x j0
