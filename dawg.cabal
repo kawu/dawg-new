@@ -31,6 +31,8 @@ library
     exposed-modules:
         Data.DAWG.Dynamic.Types
       , Data.DAWG.Dynamic.State
+      , Data.DAWG.Dynamic.State.EdgeMap
+      , Data.DAWG.Dynamic.State.EdgeMap.Map
       , Data.DAWG.Dynamic.Internal
       , Data.DAWG.Dynamic.Stack
       , Data.DAWG.Dynamic.Trie

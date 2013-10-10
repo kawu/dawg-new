@@ -2,6 +2,11 @@
 {-# LANGUAGE DoAndIfThenElse #-}
 
 
+-- | Ideas for optimization:
+-- * Use unsafe indexing.
+-- * Use ($!) within writeSTRef and modifySTRef (also in State module)
+
+
 module Data.DAWG.Dynamic.Internal
 (
 -- * DFA
@@ -117,13 +122,9 @@ growVector v k mx = do
     V.unsafeFreeze mv
 
 
--- | TODO: can try unsafe indexing for efficiency reasons.
-
-
 -- | Retrieve state with a given identifier.
 getState :: DFA s -> StateID -> ST s (State s)
-getState dfa i = do
-    (V.! i) . stateVect <$> readSTRef dfa
+getState dfa i = (V.! i) . stateVect <$> readSTRef dfa
 
 
 -- | Put state under the given identifier.  The function doesn't update
