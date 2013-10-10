@@ -23,7 +23,7 @@ module Data.DAWG.Dynamic.Internal
 
 import           Prelude hiding (lookup)
 import           Control.Applicative ((<$>), (<$), (<*>), pure)
-import           Control.Monad (forM_, unless)
+import           Control.Monad (forM_, unless, (<=<))
 import           Data.Int (Int32)
 import           Data.Maybe (fromJust)
 import qualified Data.Traversable as T
@@ -38,7 +38,7 @@ import qualified Pipes.Prelude as P
 -- import           Pipes.Parse
 
 import           Data.DAWG.Dynamic.Types
-import           Data.DAWG.Dynamic.State (State)
+import           Data.DAWG.Dynamic.State (State, StateP)
 import qualified Data.DAWG.Dynamic.State as N
 import qualified Data.DAWG.Dynamic.Stack as P
 
@@ -74,7 +74,7 @@ data DFAData s = DFAData {
     -- | A map which is used to translate active states (with an exception
     -- of the root) to their corresponding identifiers.  Inactive states
     -- are not kept in the map.
-    , stateMap  :: M.Map (State s) StateID }
+    , stateMap  :: M.Map StateP StateID }
 
 
 -- | A DFA reference.
@@ -152,7 +152,9 @@ setIngo dfa i x = do
 
 -- | Lookup state identifier in a DFA.
 lookupState :: DFA s -> State s -> ST s (Maybe StateID)
-lookupState dfa u = M.lookup u . stateMap <$> readSTRef dfa
+lookupState dfa u = M.lookup
+    <$> N.toPure u
+    <*> (stateMap <$> readSTRef dfa)
 
 
 -- | Add new state into the automaton.  The function assumes,
@@ -167,8 +169,9 @@ addNewState dfa u = do
             fromJust <$> P.pop free
     setState dfa i u
     setIngo  dfa i 1
+    u' <- N.toPure u
     modifySTRef dfa $ \dfaData ->
-        let stateMap' = M.insert u i (stateMap dfaData)
+        let stateMap' = M.insert u' i (stateMap dfaData)
         in  dfaData { stateMap = stateMap' }
     return i
 
@@ -268,7 +271,8 @@ removeState :: DFA s -> StateID -> ST s ()
 removeState dfa i = do
     dfaData@DFAData{..} <- readSTRef dfa
     P.push i freeStack
-    stateMap' <- flip M.delete stateMap <$> getState dfa i
+    stateMap' <- flip M.delete stateMap
+             <$> (N.toPure =<< getState dfa i)
     writeSTRef dfa $ dfaData { stateMap = stateMap' }
 
 
@@ -417,9 +421,9 @@ numStates DAWG{..} = (+1) . M.size . stateMap <$> readSTRef dfa
 numEdges :: DAWG s -> ST s Int
 numEdges DAWG{..} = do
     xs <- M.keys . stateMap <$> readSTRef dfa
-    x  <- getState dfa root
+    x  <- N.toPure =<< getState dfa root
     -- return . sum $ map (M.size . N.edgeMap) (x : xs)
-    P.length $ mapM_ N.transProd (x:xs)
+    P.length $ mapM_ (N.transProd <=< lift.N.fromPure) (x:xs)
 
 -- sumP :: (Monad m, Num a) => StateT (Producer a m r) m a
 -- sumP = loop 0 where
@@ -437,7 +441,7 @@ numEdges DAWG{..} = do
 printDAWG :: DAWG RealWorld -> IO ()
 printDAWG DAWG{..} = do
     DFAData{..} <- stToIO $ readSTRef dfa 
-    rootState   <- stToIO $ getState dfa root
+    rootState   <- stToIO $ N.toPure =<< getState dfa root
     forM_ ((rootState, root) : M.toList stateMap) $ \(u, i) -> do
         putStrLn $ "== " ++ show i ++ " =="
         ingo <- stToIO $ getIngo dfa  i

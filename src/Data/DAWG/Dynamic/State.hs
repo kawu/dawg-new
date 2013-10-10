@@ -5,7 +5,9 @@
 
 
 module Data.DAWG.Dynamic.State
-( State (..)
+(
+-- * State (ST)
+  State (..)
 , empty
 , null
 , state
@@ -15,6 +17,10 @@ module Data.DAWG.Dynamic.State
 , setTrans
 , transProd
 , overwrite
+-- * State (pure)
+, StateP (..)
+, fromPure
+, toPure
 , printState
 ) where
 
@@ -29,22 +35,13 @@ import qualified Data.Map as M
 import           Data.DAWG.Dynamic.Types
 
 
+-- | A mutable state of an automaton.
 data State s = State {
     -- | A (maybe) value kept in the state.
-      value     :: STRef s (Maybe Val)
+      valueRef      :: STRef s (Maybe Val)
     -- | A map of outgoing edges.  TODO: make some real
     -- implementation here.
-    , edgeMap   :: STRef s (M.Map Sym StateID) }
-
-
-instance Eq (State s) where
-    s1 == s2 =
-        v1 = 
-        
-
-
-instance Ord (State s) where
-    compare s1 s2 = undefined
+    , edgeMapRef    :: STRef s (M.Map Sym StateID) }
 
 
 -- | An empty state with one ingoing path.
@@ -55,8 +52,8 @@ empty = State <$> newSTRef Nothing <*> newSTRef M.empty
 -- | Is the state empty?
 null :: State s -> ST s Bool
 null State{..} = do
-    v <- readSTRef value
-    e <- readSTRef edgeMap
+    v <- readSTRef valueRef
+    e <- readSTRef edgeMapRef
     return $ v == Nothing && M.null e 
 
 
@@ -67,43 +64,73 @@ state v xs = State <$> newSTRef v <*> newSTRef (M.fromList xs)
 
 -- | Get a state value.
 getValue :: State s -> ST s (Maybe Val)
-getValue State{..} = readSTRef value
+getValue State{..} = readSTRef valueRef
 
 
 -- | Set a state value.
 setValue :: Maybe Val -> State s -> ST s ()
-setValue v State{..} = writeSTRef value v
+setValue v State{..} = writeSTRef valueRef v
 
 
 -- | Get the outgoing transition on a given symbol or `Nothing`.
 getTrans :: Sym -> State s -> ST s (Maybe StateID)
-getTrans x State{..} = M.lookup x <$> readSTRef edgeMap
+getTrans x State{..} = M.lookup x <$> readSTRef edgeMapRef
 
 
 -- | Set the outgoing transition on a given symbol.
 -- Use `Nothing` to delete the transition.
 setTrans :: Sym -> Maybe StateID -> State s -> ST s ()
-setTrans x mj st@State{..} = case mj of
-    Nothing -> modifySTRef edgeMap $ M.delete x
-    Just j  -> modifySTRef edgeMap $ M.insert x j
+setTrans x mj State{..} = case mj of
+    Nothing -> modifySTRef edgeMapRef $ M.delete x
+    Just j  -> modifySTRef edgeMapRef $ M.insert x j
 
 
 -- | A producer of all state transitions.
 transProd :: State s -> Producer (Sym, StateID) (ST s) ()
 transProd State{..} = do
-    xs <- lift $ M.toList <$> readSTRef edgeMap
+    xs <- lift $ M.toList <$> readSTRef edgeMapRef
     mapM_ yield xs
 
 
 -- | Overwrite the contents of the first state with the contents
 -- of the second state.
 overwrite :: State s -> State s -> ST s ()
-overwrite = undefined
+overwrite State{..} src = do
+    StateP{..} <- toPure src
+    writeSTRef valueRef value
+    writeSTRef edgeMapRef edgeMap
+
+
+---------------------------------------------------
+-- Pure version of a state
+---------------------------------------------------
+
+
+-- | A pure version of a state.
+data StateP = StateP {
+    -- | A (maybe) value kept in the state.
+      value     :: Maybe Val
+    -- | A map of outgoing edges.  TODO: make some real
+    -- implementation here.
+    , edgeMap   :: M.Map Sym StateID
+    } deriving (Show, Eq, Ord)
+
+
+-- | Translate state to its pure version.
+fromPure :: StateP -> ST s (State s)
+fromPure StateP{..} = State <$> newSTRef value <*> newSTRef edgeMap
+
+
+-- | Translate state to its pure version.
+toPure :: State s -> ST s StateP
+toPure State{..} = StateP <$> readSTRef valueRef <*> readSTRef edgeMapRef
 
 
 -- | A helper state printing function.
-printState :: State s -> IO ()
-printState = undefined
+printState :: StateP -> IO ()
+printState StateP{..} = do
+    putStr "value:\t" >> print value
+    mapM_ print (M.toList edgeMap)
 
 
 ---------------------------------------------------
