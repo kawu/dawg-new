@@ -43,7 +43,7 @@ import qualified Pipes.Prelude as P
 -- import           Pipes.Parse
 
 import           Data.DAWG.Dynamic.Types
-import           Data.DAWG.Dynamic.State (State, StateI)
+import           Data.DAWG.Dynamic.State (State, State')
 import qualified Data.DAWG.Dynamic.State as N
 import qualified Data.DAWG.Dynamic.Stack as P
 
@@ -79,7 +79,7 @@ data DFAData s = DFAData {
     -- | A map which is used to translate active states (with an exception
     -- of the root) to their corresponding identifiers.  Inactive states
     -- are not kept in the map.
-    , stateMap  :: M.Map StateP StateID }
+    , stateMap  :: M.Map State' StateID }
 
 
 -- | A DFA reference.
@@ -154,7 +154,7 @@ setIngo dfa i x = do
 -- | Lookup state identifier in a DFA.
 lookupState :: DFA s -> State s -> ST s (Maybe StateID)
 lookupState dfa u = M.lookup
-    <$> N.toPure u
+    <$> N.unsafeFreeze u
     <*> (stateMap <$> readSTRef dfa)
 
 
@@ -170,7 +170,10 @@ addNewState dfa u = do
             fromJust <$> P.pop free
     setState dfa i u
     setIngo  dfa i 1
-    u' <- N.toPure u
+    -- We use the safe version of the `freeze` function here,
+    -- because the frozen state will stay in the map for some
+    -- time now.
+    u' <- N.freeze u
     modifySTRef dfa $ \dfaData ->
         let stateMap' = M.insert u' i (stateMap dfaData)
         in  dfaData { stateMap = stateMap' }
@@ -273,7 +276,7 @@ removeState dfa i = do
     dfaData@DFAData{..} <- readSTRef dfa
     P.push i freeStack
     stateMap' <- flip M.delete stateMap
-             <$> (N.toPure =<< getState dfa i)
+             <$> (N.unsafeFreeze =<< getState dfa i)
     writeSTRef dfa $ dfaData { stateMap = stateMap' }
 
 
@@ -282,9 +285,9 @@ removeState dfa i = do
 branch :: DFA s -> [Sym] -> Val -> ST s StateID
 branch dfa (x:xs) y = do
     j <- branch dfa xs y
-    forceAddState dfa =<< N.state Nothing [(x, j)]
+    forceAddState dfa =<< N.mkEdge x j
 branch dfa [] y = do
-    forceAddState dfa =<< N.state (Just y) []
+    forceAddState dfa =<< N.mkValue y
 
 
 ----------------------------------------------------------------------
@@ -310,18 +313,6 @@ insert dfa (x:xs) y i0 = do
             return (Just i0)
         | ingo > 1  = do    -- A confluent state
             -- TODO: perhaps it could be done in a more bracket-like style?
-            -- BEWARE: we are doing something unsafe here!  The change of the
-            -- state value, which takes place here witin the ST monad, can lead
-            -- to an analogous change of state within the (State -> StateID)
-            -- map, which is supposed to be pure!  It derives from the fact,
-            -- that we are (possibly) using the unsafeFreeze function before
-            -- puting states into the (State -> StateID) map.  Is it "safe"
-            -- to do that?
-            --
-            -- IDEA: maybe we could just put into the map states which were
-            -- freezed in a safe way?  Why do we even need the unsafeFreeze
-            -- here?  Or, in other words, what is the precise place were we
-            -- should be using the unsafe version of state-freeze?
             setTrans dfa i0 x j1
             i1 <- addState dfa i0
             setTrans dfa i0 x j0
@@ -392,7 +383,7 @@ assocs dfa xs i = do
             Just v  -> yield (reverse xs, v)
     assocsLower = do
         u <- lift $ getState dfa i
-        for (N.transProd u) $ \(x, j) -> do
+        for (N.edgeProd u) $ \(x, j) -> do
             assocs dfa (x:xs) j
 --         sequence_
 --             [ assocs dfa (x:xs) j
@@ -434,15 +425,8 @@ numStates DAWG{..} = (+1) . M.size . stateMap <$> readSTRef dfa
 numEdges :: DAWG s -> ST s Int
 numEdges DAWG{..} = do
     xs <- M.keys . stateMap <$> readSTRef dfa
-    x  <- N.toPure =<< getState dfa root
-    -- return . sum $ map (M.size . N.edgeMap) (x : xs)
-    P.length $ mapM_ (N.transProd <=< lift.N.fromPure) (x:xs)
-
--- sumP :: (Monad m, Num a) => StateT (Producer a m r) m a
--- sumP = loop 0 where
---     loop x = draw >>= either
---         (\_ -> return x)
---         (\y -> loop $! x + y)
+    x  <- N.freeze =<< getState dfa root
+    P.length $ mapM_ (N.edgeProd <=< lift.N.thaw) (x:xs)
 
 
 ----------------------------------------------------------------------
@@ -454,9 +438,9 @@ numEdges DAWG{..} = do
 printDAWG :: DAWG RealWorld -> IO ()
 printDAWG DAWG{..} = do
     DFAData{..} <- stToIO $ readSTRef dfa 
-    rootState   <- stToIO $ N.toPure =<< getState dfa root
+    rootState   <- stToIO $ N.freeze =<< getState dfa root
     forM_ ((rootState, root) : M.toList stateMap) $ \(u, i) -> do
         putStrLn $ "== " ++ show i ++ " =="
         ingo <- stToIO $ getIngo dfa  i
         putStr "ingo:\t" >> print ingo
-        N.printState u
+        N.printState' u

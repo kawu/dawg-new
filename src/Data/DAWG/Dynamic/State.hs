@@ -17,12 +17,13 @@ module Data.DAWG.Dynamic.State
 , getTrans
 , setTrans
 , edgeProd
--- , overwrite
+, overwrite
 -- * State (imutable)
-, StateI (..)
-, unsafeThaw
+, State' (..)
+, freeze
 , unsafeFreeze
-, printState
+, thaw
+, printState'
 ) where
 
 
@@ -36,8 +37,10 @@ import           Pipes
 import           Data.DAWG.Dynamic.Types
 
 -- Choice of the low-level transition representation.
-import           Data.DAWG.Dynamic.State.EdgeMap.Map
-import qualified Data.DAWG.Dynamic.State.EdgeMap as E
+-- TODO: could we export appropriate functions from the `Map` submodule
+-- and not import the EdgeMap class-module?
+import           Data.DAWG.Dynamic.State.EdgeMap.Map (EdgeMap, EdgeMap')
+import qualified Data.DAWG.Dynamic.State.EdgeMap.Map as E
 
 
 ---------------------------------------------------
@@ -104,13 +107,13 @@ edgeProd :: State s -> Producer (Sym, StateID) (ST s) ()
 edgeProd State{..} = E.toProd edgeMap
 
 
--- -- | Overwrite the contents of the first state with the contents
--- -- of the second state.
--- overwrite :: State s -> State s -> ST s ()
--- overwrite State{..} src = do
---     StateP{..} <- unsafeFreeze src
---     writeSTRef valueRef value
---     writeSTRef edgeMapRef edgeMap
+-- | Overwrite the contents of the first state with the contents
+-- of the second state.
+overwrite :: State s -> State s -> ST s ()
+overwrite dst src = do
+    -- State'{..} <- unsafeFreeze src
+    writeSTRef (valueRef dst) =<< readSTRef (valueRef src)
+    E.overwrite (edgeMap dst) (edgeMap src)
 
 
 ---------------------------------------------------
@@ -119,29 +122,38 @@ edgeProd State{..} = E.toProd edgeMap
 
 
 -- | A pure version of a state.
-data StateI = StateI {
+data State' = State' {
     -- | A (maybe) value kept in the state.
       value     :: Maybe Val
     -- | A map of outgoing edges.
-    , edgeMap   :: EdgeMapI
+    , edgeMap'  :: EdgeMap'
     } deriving (Show, Eq, Ord)
 
 
 -- | Translate state to its pure version.
-unsafeThaw :: StateP -> ST s (State s)
-unsafeThaw StateP{..} = State <$> newSTRef value <*> newSTRef edgeMap
+unsafeFreeze :: State s -> ST s State'
+unsafeFreeze State{..} = State'
+    <$> readSTRef valueRef
+    <*> E.unsafeFreeze edgeMap
 
 
 -- | Translate state to its pure version.
-unsafeFreeze :: State s -> ST s StateP
-unsafeFreeze State{..} = StateP <$> readSTRef valueRef <*> readSTRef edgeMapRef
+freeze :: State s -> ST s State'
+freeze State{..} = State'
+    <$> readSTRef valueRef
+    <*> E.freeze edgeMap
+
+
+-- | Translate state to its pure version.
+thaw :: State' -> ST s (State s)
+thaw State'{..} = State <$> newSTRef value <*> E.thaw edgeMap'
 
 
 -- | A helper state printing function.
-printState :: StateP -> IO ()
-printState StateP{..} = do
+printState' :: State' -> IO ()
+printState' State'{..} = do
     putStr "value:\t" >> print value
-    mapM_ print (M.toList edgeMap)
+    E.printEdgeMap' edgeMap'
 
 
 ---------------------------------------------------
