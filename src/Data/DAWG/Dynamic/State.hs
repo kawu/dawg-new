@@ -38,9 +38,9 @@ import           Data.DAWG.Dynamic.Types
 
 -- Choice of the low-level transition representation.
 -- TODO: could we export appropriate functions from the `Map` submodule
--- and not import the EdgeMap class-module?
-import           Data.DAWG.Dynamic.State.EdgeMap.Map (EdgeMap, EdgeMap')
-import qualified Data.DAWG.Dynamic.State.EdgeMap.Map as E
+-- and not import the Trans class-module?
+import           Data.DAWG.Dynamic.State.Trans.Vect (Trans, Trans')
+import qualified Data.DAWG.Dynamic.State.Trans.Vect as E
 
 
 ---------------------------------------------------
@@ -53,7 +53,7 @@ data State s = State {
     -- | A (maybe) value kept in the state.
       valueRef  :: STRef s (Maybe Val)
     -- | A map of outgoing edges.
-    , edgeMap   :: EdgeMap s }
+    , edgeMap   :: Trans s }
 
 
 -- | An empty state with one ingoing path.
@@ -126,7 +126,7 @@ data State' = State' {
     -- | A (maybe) value kept in the state.
       value     :: Maybe Val
     -- | A map of outgoing edges.
-    , edgeMap'  :: EdgeMap'
+    , edgeMap'  :: Trans'
     } deriving (Show, Eq, Ord)
 
 
@@ -153,7 +153,7 @@ thaw State'{..} = State <$> newSTRef value <*> E.thaw edgeMap'
 printState' :: State' -> IO ()
 printState' State'{..} = do
     putStr "value:\t" >> print value
-    E.printEdgeMap' edgeMap'
+    E.printTrans' edgeMap'
 
 
 ---------------------------------------------------

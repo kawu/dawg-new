@@ -5,10 +5,10 @@
 -- | Implementation of a transition map build on top of the "M.Map" container.
 
 
-module Data.DAWG.Dynamic.State.EdgeMap.Map
+module Data.DAWG.Dynamic.State.Trans.Map
 (
 -- * Transition map (ST)
-  EdgeMap
+  Trans
 , empty
 , singleton
 , null
@@ -19,8 +19,8 @@ module Data.DAWG.Dynamic.State.EdgeMap.Map
 , overwrite
 
 -- * Transition map (pure)
-, EdgeMap'
-, printEdgeMap'
+, Trans'
+, printTrans'
 
 -- * Conversion
 , thaw
@@ -45,50 +45,50 @@ import           Data.DAWG.Dynamic.Types
 
 
 -- | An ST version of transition map.
-newtype EdgeMap s = EdgeMap
+newtype Trans s = Trans
     { edgeMapRef :: STRef s (M.Map Sym StateID) }
 
 
 -- | Empty transition map.
-empty :: ST s (EdgeMap s)
-empty = EdgeMap <$> newSTRef M.empty
+empty :: ST s (Trans s)
+empty = Trans <$> newSTRef M.empty
 
 
 -- | Single-element transition map.
-singleton :: Sym -> StateID -> ST s (EdgeMap s)
-singleton x y = EdgeMap <$> newSTRef (M.singleton x y)
+singleton :: Sym -> StateID -> ST s (Trans s)
+singleton x y = Trans <$> newSTRef (M.singleton x y)
 
 
 -- | Is the map empty?
-null :: EdgeMap s -> ST s Bool
-null EdgeMap{..} = M.null <$> readSTRef edgeMapRef
+null :: Trans s -> ST s Bool
+null Trans{..} = M.null <$> readSTRef edgeMapRef
 
 
 -- | Lookup symbol in the map.
-lookup :: Sym -> EdgeMap s -> ST s (Maybe StateID)
-lookup x EdgeMap{..} = M.lookup x <$> readSTRef edgeMapRef
+lookup :: Sym -> Trans s -> ST s (Maybe StateID)
+lookup x Trans{..} = M.lookup x <$> readSTRef edgeMapRef
 
 
 -- | Insert element to the map.
-insert :: Sym -> StateID -> EdgeMap s -> ST s ()
-insert x y EdgeMap{..} = modifySTRef edgeMapRef $! M.insert x y
+insert :: Sym -> StateID -> Trans s -> ST s ()
+insert x y Trans{..} = modifySTRef edgeMapRef $! M.insert x y
 
 
 -- | Remove element from the map.
-delete :: Sym -> EdgeMap s -> ST s ()
-delete x EdgeMap{..} = modifySTRef edgeMapRef $! M.delete x
+delete :: Sym -> Trans s -> ST s ()
+delete x Trans{..} = modifySTRef edgeMapRef $! M.delete x
 
 
 -- | Translate map into a producer.
-toProd :: EdgeMap s -> Producer (Sym, StateID) (ST s) ()
-toProd EdgeMap{..} = do
+toProd :: Trans s -> Producer (Sym, StateID) (ST s) ()
+toProd Trans{..} = do
     xs <- lift $ M.toList <$> readSTRef edgeMapRef
     mapM_ yield xs
 
 
 -- | Overwrite the contents of the first map with the contents
 -- of the second map.
-overwrite :: EdgeMap s -> EdgeMap s -> ST s ()
+overwrite :: Trans s -> Trans s -> ST s ()
 overwrite dst src = writeSTRef (edgeMapRef dst)
                 =<< readSTRef  (edgeMapRef src)
 
@@ -99,13 +99,13 @@ overwrite dst src = writeSTRef (edgeMapRef dst)
 
 
 -- | A pure, immutable version of the transition map.
-newtype EdgeMap' = EdgeMap' (M.Map Sym StateID)
+newtype Trans' = Trans' (M.Map Sym StateID)
     deriving (Show, Eq, Ord)
 
 
 -- | Print information about the transition map.
-printEdgeMap' :: EdgeMap' -> IO ()
-printEdgeMap' (EdgeMap' edgeMap) = mapM_ print $ M.toList edgeMap
+printTrans' :: Trans' -> IO ()
+printTrans' (Trans' edgeMap) = mapM_ print $ M.toList edgeMap
 
 
 ------------------------------------------------------------------
@@ -114,15 +114,15 @@ printEdgeMap' (EdgeMap' edgeMap) = mapM_ print $ M.toList edgeMap
 
 
 -- | Translate map to its pure version.
-freeze :: EdgeMap s -> ST s EdgeMap'
-freeze EdgeMap{..} = EdgeMap' <$> readSTRef edgeMapRef
+freeze :: Trans s -> ST s Trans'
+freeze Trans{..} = Trans' <$> readSTRef edgeMapRef
 
 
 -- | Translate map to its pure version.
-unsafeFreeze :: EdgeMap s -> ST s EdgeMap'
+unsafeFreeze :: Trans s -> ST s Trans'
 unsafeFreeze = freeze
 
 
 -- | Translate map to its ST version.
-thaw :: EdgeMap' -> ST s (EdgeMap s)
-thaw (EdgeMap' edgeMap) = EdgeMap <$> newSTRef edgeMap
+thaw :: Trans' -> ST s (Trans s)
+thaw (Trans' edgeMap) = Trans <$> newSTRef edgeMap
