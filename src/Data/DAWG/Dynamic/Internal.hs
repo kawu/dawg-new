@@ -4,7 +4,7 @@
 
 -- | Ideas for optimization:
 -- * Use unsafe indexing.
--- * Use ($!) within writeSTRef and modifySTRef (also in State module)
+-- * Use ($!) within writeSTRef and modifySTRef(?) (also in State module)
 
 
 module Data.DAWG.Dynamic.Internal
@@ -28,14 +28,15 @@ module Data.DAWG.Dynamic.Internal
 
 import           Prelude hiding (lookup)
 import           Control.Applicative ((<$>), (<$), (<*>), pure)
-import           Control.Monad (forM_, unless, (<=<))
+import           Control.Monad (forM_, unless, join)
 import           Data.Int (Int32)
 import           Data.Maybe (fromJust)
 import qualified Data.Traversable as T
 import qualified Data.Vector as V
 import qualified Data.Vector.Mutable as VM
 import qualified Data.Vector.Unboxed.Mutable as U
-import qualified Data.Map as M
+-- import qualified Data.Map as M
+import qualified Data.HashTable.ST.Basic as H
 import           Data.STRef
 import           Control.Monad.ST
 import           Pipes
@@ -45,7 +46,7 @@ import qualified Pipes.Prelude as P
 import           Data.DAWG.Dynamic.Types
 import           Data.DAWG.Dynamic.State (State, State')
 import qualified Data.DAWG.Dynamic.State as N
-import qualified Data.DAWG.Dynamic.Stack as P
+import qualified Data.DAWG.Dynamic.Stack as S
 
 
 ----------------------------------------------------------------------
@@ -74,12 +75,13 @@ data DFAData s = DFAData {
     , ingoVect  :: U.MVector s Int32
 
     -- | A stack of free state slots, i.e. inactive states identifiers.
-    , freeStack :: P.Stack s StateID
+    , freeStack :: S.Stack s StateID
 
     -- | A map which is used to translate active states (with an exception
     -- of the root) to their corresponding identifiers.  Inactive states
     -- are not kept in the map.
-    , stateMap  :: M.Map State' StateID }
+    -- , stateMap  :: M.Map State' StateID }
+    , stateMap  :: H.HashTable s State' StateID }
 
 
 -- | A DFA reference.
@@ -105,8 +107,9 @@ grow dfa = do
         , ingoVect  = ingoVect' }
 
     let n2 = n*2
+    -- TODO: push data jointly to the stack.
     forM_ [n2, n2-1 .. n] $ \i -> do
-        P.push i freeStack
+        S.push i freeStack
 
 
 -- | Grow an immutable boxed vector by a given number of monadic `a` elements.
@@ -153,9 +156,9 @@ setIngo dfa i x = do
 
 -- | Lookup state identifier in a DFA.
 lookupState :: DFA s -> State s -> ST s (Maybe StateID)
-lookupState dfa u = M.lookup
-    <$> N.unsafeFreeze u
-    <*> (stateMap <$> readSTRef dfa)
+lookupState dfa u = join $ H.lookup
+    <$> (stateMap <$> readSTRef dfa)
+    <*> N.unsafeFreeze u
 
 
 -- | Add new state into the automaton.  The function assumes,
@@ -163,20 +166,25 @@ lookupState dfa u = M.lookup
 addNewState :: DFA s -> State s -> ST s StateID
 addNewState dfa u = do
     free <- freeStack <$> readSTRef dfa
-    i <- P.pop free >>= \mi -> case mi of
+    i <- S.pop free >>= \mi -> case mi of
         Just i  -> return i
         Nothing -> do
             grow dfa
-            fromJust <$> P.pop free
+            fromJust <$> S.pop free
     setState dfa i u
     setIngo  dfa i 1
     -- We use the safe version of the `freeze` function here,
     -- because the frozen state will stay in the map for some
-    -- time now.
-    u' <- N.freeze u
-    modifySTRef dfa $ \dfaData ->
-        let stateMap' = M.insert u' i (stateMap dfaData)
-        in  dfaData { stateMap = stateMap' }
+    -- time now.  TODO: check if this is really neccesseary.
+    -- It could be much more economic to use `unsafeFreeze`
+    -- here.
+--     u' <- N.freeze u
+--     modifySTRef' dfa $ \dfaData ->
+--         let stateMap' = M.insert u' i (stateMap dfaData)
+--         in  dfaData { stateMap = stateMap' }
+    readSTRef dfa >>= \DFAData{..} -> do
+        u' <- N.freeze u
+        H.insert stateMap u' i
     return i
 
 
@@ -273,15 +281,16 @@ whenFalse mx m = do
 -- unless the state under the @i@ ID is empty.
 removeState :: DFA s -> StateID -> ST s ()
 removeState dfa i = do
-    dfaData@DFAData{..} <- readSTRef dfa
-    P.push i freeStack
+    DFAData{..} <- readSTRef dfa
+    S.push i freeStack
     -- BEWARE: using unsafeFreeze in the following code can be
     -- dangerous.  If the deletion is not performed immediately,
     -- data cam be corrupted afterwards (see the `insert` function,
     -- non-confluent case).
-    stateMap' <- flip M.delete stateMap
-             <$> (N.unsafeFreeze =<< getState dfa i)
-    writeSTRef dfa $ stateMap' `seq` dfaData { stateMap = stateMap' }
+--     stateMap' <- flip M.delete stateMap
+--              <$> (N.unsafeFreeze =<< getState dfa i)
+--     writeSTRef dfa $ stateMap' `seq` dfaData { stateMap = stateMap' }
+    H.delete stateMap =<< N.unsafeFreeze =<< getState dfa i
 
 
 -- | Create a new branch in a DFA.  TODO: Can we optimize it?
@@ -411,26 +420,48 @@ empty = do
     dfaData <- DFAData
         <$> pure V.empty
         <*> U.new 0
-        <*> P.empty
-        <*> pure M.empty
+        <*> S.empty
+        <*> H.new
     dfa  <- newSTRef dfaData
     i    <- forceAddState dfa =<< N.empty
     -- The root must not be in the state map (see the `insertRoot` function).
-    modifySTRef dfa $ \x -> x { stateMap = M.empty }
+    H.new >>= \emptyMap -> do
+        modifySTRef dfa $ \x -> x { stateMap = emptyMap }
+    -- modifySTRef' dfa $ \x -> x { stateMap = M.empty }
     return $ DAWG dfa i
 
 
 -- | Number of states in the automaton.
+-- TODO: Compute as |stateVect| - |freeStack|.
 numStates :: DAWG s -> ST s Int
-numStates DAWG{..} = (+1) . M.size . stateMap <$> readSTRef dfa
+-- numStates DAWG{..} = (+1) . M.size . stateMap <$> readSTRef dfa
+-- numStates DAWG{..} = do
+--     h <- stateMap <$> readSTRef dfa
+--     H.foldM (\acc _ -> acc + 1) 0 h
+numStates DAWG{..} = do
+    DFAData{..} <- readSTRef dfa
+    let n = V.length stateVect
+    m <- S.length freeStack
+    return $ n - m
 
 
 -- | Number of edges in the automaton.
+-- TODO: Compute wrt stateVect and ingoVect.
 numEdges :: DAWG s -> ST s Int
 numEdges DAWG{..} = do
-    xs <- M.keys . stateMap <$> readSTRef dfa
-    x  <- N.freeze =<< getState dfa root
-    P.length $ mapM_ (N.edgeProd <=< lift.N.thaw) (x:xs)
+    DFAData{..} <- readSTRef dfa
+    n <- newSTRef 0
+    flip H.mapM_ stateMap $ account n . fst
+    account n =<< N.freeze =<< getState dfa root
+    readSTRef n
+  where
+    x .+ y = let z = x + y in z `seq` z
+    account acc u = do
+        k <- P.length $ N.edgeProd =<< lift (N.thaw u)
+        modifySTRef acc (.+k)
+--     xs <- M.keys . stateMap <$> readSTRef dfa
+--     x  <- N.freeze =<< getState dfa root
+--     P.length $ mapM_ (N.edgeProd <=< lift.N.thaw) (x:xs)
 
 
 ----------------------------------------------------------------------
@@ -443,7 +474,11 @@ printDAWG :: DAWG RealWorld -> IO ()
 printDAWG DAWG{..} = do
     DFAData{..} <- stToIO $ readSTRef dfa 
     rootState   <- stToIO $ N.freeze =<< getState dfa root
-    forM_ ((rootState, root) : M.toList stateMap) $ \(u, i) -> do
+    process (rootState, root)
+    stToIO $ H.mapM_ (unsafeIOToST.process) stateMap
+    -- forM_ ((rootState, root) : M.toList stateMap) process
+  where
+    process (u, i) = do
         putStrLn $ "== " ++ show i ++ " =="
         ingo <- stToIO $ getIngo dfa  i
         putStr "ingo:\t" >> print ingo

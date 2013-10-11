@@ -3,12 +3,14 @@
 
 module Data.DAWG.Dynamic.Stack
 ( Stack
+, length
 , empty
 , push
 , pop
 ) where
 
 
+import           Prelude hiding (length)
 import           Control.Applicative ((<$>), (<*>), pure)
 import           Control.Monad.ST
 import           Data.STRef
@@ -23,6 +25,11 @@ data State s a = State
 
 -- | A stack of unboxed values.
 type Stack s a = STRef s (State s a)
+
+
+-- | Number of elements in the stack.
+length :: Stack s a -> ST s Int
+length ref = size <$> readSTRef ref
 
 
 -- | A new, empty stack.

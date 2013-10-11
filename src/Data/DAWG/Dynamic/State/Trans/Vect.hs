@@ -1,6 +1,7 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE DeriveGeneric #-}
 
 
 -- | Implementation of a transition map.
@@ -34,12 +35,13 @@ import           Prelude hiding (null, lookup)
 import           Control.Applicative ((<$>), (<*>), pure)
 import           Control.Monad (forM_)
 import           Control.Monad.ST
+import           Pipes
 import           Data.Monoid (mconcat)
 import           Data.Bits (shiftR)
 import           Data.STRef
 import qualified Data.Vector.Unboxed.Mutable as M
 import qualified Data.Vector.Unboxed as I
-import           Pipes
+import           Data.Hashable
 
 import           Data.DAWG.Dynamic.Types
 
@@ -212,6 +214,15 @@ data Trans' = Trans'
     , stiv' :: I.Vector StateID
     , size' :: {-# UNPACK #-} !Int }
     deriving (Show)
+
+
+-- TODO: Optimize implementation?
+instance Hashable Trans' where
+    hashWithSalt s Trans'{..} = s
+        `hashWithSalt` hashIVec symv'
+        `hashWithSalt` hashIVec stiv'
+        where hashIVec = I.toList . I.slice 0 size'
+        -- `hashWithSalt` size'
 
 
 instance Eq Trans' where

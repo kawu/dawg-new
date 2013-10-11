@@ -1,4 +1,5 @@
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE DeriveGeneric #-}
 
 
 -- | An automaton state.
@@ -30,8 +31,9 @@ module Data.DAWG.Dynamic.State
 import           Prelude hiding (null)
 import           Control.Applicative ((<$>), (<*>))
 import           Control.Monad.ST
-import           Data.STRef
 import           Pipes
+import           Data.STRef
+import           Data.Hashable
 -- import qualified Data.Map as M
 
 import           Data.DAWG.Dynamic.Types
@@ -128,6 +130,12 @@ data State' = State' {
     -- | A map of outgoing edges.
     , edgeMap'  :: Trans'
     } deriving (Show, Eq, Ord)
+
+
+instance Hashable State' where
+    hashWithSalt s State'{..} = s
+        `hashWithSalt` value
+        `hashWithSalt` edgeMap'
 
 
 -- | Translate state to its pure version.

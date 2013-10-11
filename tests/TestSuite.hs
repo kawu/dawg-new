@@ -18,6 +18,10 @@ symNum  = 5     -- Number of distinct symbols.
 valNum  = 3     -- Number of distinct values.
 wordLen = 5     -- Word length (max).
 wordNum = 50    -- Number of words (max).
+-- symNum  = 2     -- Number of distinct symbols.
+-- valNum  = 1     -- Number of distinct values.
+-- wordLen = 2     -- Word length (max).
+-- wordNum = 2     -- Number of words (max).
 
 
 -- | An arbitrary symbol.
@@ -64,8 +68,8 @@ contentProp (Input xs) =
 -- be equal to the size of the DAWG.
 minimalProp :: Input -> Bool
 minimalProp (Input xs) =
-    -- trace (show (n, e) ++ " /=/ " ++ show (n', e')) $
-    -- unsafePerformIO (D.printDAWG =<< stToIO (D.fromList xs)) `seq`
+--     trace (show (n, e) ++ " <- DAWG /=/ Trie -> " ++ show (n', e')) $
+--     unsafePerformIO (D.printDAWG =<< stToIO (D.fromList xs)) `seq`
     n == n' && e == e'
   where
     -- DAWG version
