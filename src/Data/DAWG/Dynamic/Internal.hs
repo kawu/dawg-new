@@ -275,9 +275,13 @@ removeState :: DFA s -> StateID -> ST s ()
 removeState dfa i = do
     dfaData@DFAData{..} <- readSTRef dfa
     P.push i freeStack
+    -- BEWARE: using unsafeFreeze in the following code can be
+    -- dangerous.  If the deletion is not performed immediately,
+    -- data cam be corrupted afterwards (see the `insert` function,
+    -- non-confluent case).
     stateMap' <- flip M.delete stateMap
              <$> (N.unsafeFreeze =<< getState dfa i)
-    writeSTRef dfa $ dfaData { stateMap = stateMap' }
+    writeSTRef dfa $ stateMap' `seq` dfaData { stateMap = stateMap' }
 
 
 -- | Create a new branch in a DFA.  TODO: Can we optimize it?

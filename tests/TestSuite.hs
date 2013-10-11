@@ -9,9 +9,12 @@ import           Data.DAWG.Dynamic.Types
 import qualified Data.DAWG.Dynamic as D
 import qualified Data.DAWG.Dynamic.Trie as Trie
 
+-- import           Debug.Trace (trace)
+-- import           System.IO.Unsafe (unsafePerformIO)
+
 
 -- Input parameters.
-symNum  = 3     -- Number of distinct symbols.
+symNum  = 5     -- Number of distinct symbols.
 valNum  = 3     -- Number of distinct values.
 wordLen = 5     -- Word length (max).
 wordNum = 50    -- Number of words (max).
@@ -19,12 +22,12 @@ wordNum = 50    -- Number of words (max).
 
 -- | An arbitrary symbol.
 arbitrarySym :: Gen Sym
-arbitrarySym = choose (0, symNum)
+arbitrarySym = choose (0, symNum-1)
 
 
 -- | An arbitrary value.
 arbitraryVal :: Gen Sym
-arbitraryVal = choose (0, valNum)
+arbitraryVal = choose (0, valNum-1)
 
 
 -- | An arbitrary word.
@@ -49,6 +52,7 @@ instance Arbitrary Input where
 -- | Property: a DAWG dictionary can be used like a map.
 contentProp :: Input -> Bool
 contentProp (Input xs) =
+    -- trace (show m ++ "\n===========\n" ++ show d) $
     m == d
   where
     m = M.assocs (M.fromList xs)
@@ -60,14 +64,16 @@ contentProp (Input xs) =
 -- be equal to the size of the DAWG.
 minimalProp :: Input -> Bool
 minimalProp (Input xs) =
+    -- trace (show (n, e) ++ " /=/ " ++ show (n', e')) $
+    -- unsafePerformIO (D.printDAWG =<< stToIO (D.fromList xs)) `seq`
     n == n' && e == e'
   where
-    ts = S.fromList . Trie.subTries $ Trie.fromList xs
-
+    -- DAWG version
     n  = runST $ D.numStates =<< D.fromList xs
+    e  = runST $ D.numEdges  =<< D.fromList xs
+    -- Trie version
+    ts = S.fromList . Trie.subTries $ Trie.fromList xs
     n' = S.size ts
-
-    e  = runST $ D.numEdges =<< D.fromList xs
     e' = sum $ map (M.size . Trie.edgeMap) (S.toList ts)
 
 

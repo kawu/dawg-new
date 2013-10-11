@@ -37,7 +37,6 @@ import           Control.Monad.ST
 import           Data.Monoid (mconcat)
 import           Data.Bits (shiftR)
 import           Data.STRef
-import           Data.Vector.Unboxed (Unbox)
 import qualified Data.Vector.Unboxed.Mutable as M
 import qualified Data.Vector.Unboxed as I
 import           Pipes
@@ -118,15 +117,17 @@ insert x y t = do
     ek <- binarySearch x symv 0 size
     case ek of
         Left k  -> M.unsafeWrite stiv k y
-        Right k -> insertAfter x y k t
+        Right k -> insertOn x y k t
 --             let (v'L, v'R) = U.splitAt k v
 --             in  U.concat [v'L, U.singleton (x, y), v'R]
 
 
 -- | Insert new element to the map immediately after the given number
--- of elements.
-insertAfter :: Sym -> StateID -> Int -> Trans s -> ST s ()
-insertAfter x y k t = do
+-- of elements.  Or, in other words, place element on the given
+-- position, shifting all elements on the right of the position one
+-- place further right.
+insertOn :: Sym -> StateID -> Int -> Trans s -> ST s ()
+insertOn x y k t = do
     st@State{..} <- checkGrow t
     forM_ [size, size-1 .. k+1] $ \i -> do
         M.unsafeWrite symv i =<< M.unsafeRead symv (i-1)
@@ -142,13 +143,13 @@ delete x t = do
     State{..} <- readSTRef t
     ek <- binarySearch x symv 0 size
     case ek of
-        Left k  -> deleteIx k t
+        Left k  -> deleteOn k t
         Right _ -> return ()
 
 
 -- | Delete particular position in the transition map.
-deleteIx :: Int -> Trans s -> ST s ()
-deleteIx k t = do
+deleteOn :: Int -> Trans s -> ST s ()
+deleteOn k t = do
     -- TODO: Could do `checkShrink` here?
     st@State{..} <- readSTRef t
     forM_ [k, k+1 .. size-2] $ \i -> do
@@ -169,13 +170,26 @@ toProd t = do
 
 -- | Overwrite the contents of the first map with the contents
 -- of the second map.
+--
+-- TODO: perhaps we could make somehow use of the memory allocated
+-- within the destination transition map?   On the other hand,
+-- cf. the question in the comments of the Internal.setSate
+-- function.
 overwrite :: Trans s -> Trans s -> ST s ()
 overwrite dst src = do
-    st <- readSTRef src
-    writeSTRef dst st
+    State{..} <- readSTRef src
+    writeSTRef dst =<< State
+        <$> M.clone symv
+        <*> M.clone stiv
+        <*> pure size
+-- [*] This version is wrong!  We have to make a new instance of data!
+-- overwrite :: Trans s -> Trans s -> ST s ()
+-- overwrite dst src = do
+--     st <- readSTRef src
+--     writeSTRef dst st
 
 
--- | Grow the map before `insertAfter`.
+-- | Grow the map before `insertOn`.
 checkGrow :: Trans s -> ST s (State s)
 checkGrow t = do
     st@State{..} <- readSTRef t
@@ -231,7 +245,8 @@ instance Ord Trans' where
 
 -- | Print information about the transition map.
 printTrans' :: Trans' -> IO ()
-printTrans' = print
+printTrans' Trans'{..} = forM_ [0..size'-1] $ \i -> do
+    print (symv' I.! i, stiv' I.! i)
 
 
 ------------------------------------------------------------------
@@ -273,25 +288,22 @@ thaw Trans'{..} = do
 
 
 -- | Given a strictly ascending vector, find an index at which the
--- given element could be inserted while preserving sortedness.
+-- given symbol could be inserted while preserving sortedness.
 -- The 'Left' result indicates, that the 'EQ' element has been found,
 -- while the 'Right' result means otherwise.  Value of the 'Right'
 -- result is in the [0,n] range.
-binarySearch
-    :: (Eq a, Ord a, Unbox a)
-    => a -> M.MVector s a
-    -> Int -> Int
-    -> ST s (Either Int Int)
+binarySearch :: Sym -> M.MVector s Sym -> Int -> Int -> ST s (Either Int Int)
 binarySearch x v =
     loop
   where
+    cmpx = compare x
     loop !l !u
         | u <= l    = return (Right l)
         | otherwise = do
             let k = (u + l) `shiftR` 1
             y <- M.unsafeRead v k
-            case compare x y of
-                LT -> loop (k+1) u
+            case cmpx y of
+                GT -> loop (k+1) u
                 EQ -> return (Left k)
-                GT -> loop l k
+                LT -> loop l k
 {-# INLINE binarySearch #-}
