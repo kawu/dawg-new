@@ -38,9 +38,11 @@ module Data.DAWG.Dynamic
 , toList
 -- , fromListWith
 
--- * Printing
+-- * Misc
+, I.hashFreq
 , printDAWG
 ) where
+
 
 
 import           Prelude hiding (lookup)

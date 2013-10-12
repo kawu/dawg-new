@@ -22,6 +22,7 @@ module Data.DAWG.Dynamic.Internal
 , numEdges
 , empty
 , assocs
+, hashFreq
 , printDAWG
 ) where
 
@@ -35,8 +36,9 @@ import qualified Data.Traversable as T
 import qualified Data.Vector as V
 import qualified Data.Vector.Mutable as VM
 import qualified Data.Vector.Unboxed.Mutable as U
--- import qualified Data.Map as M
+import qualified Data.Map as M
 import qualified Data.HashTable.ST.Basic as H
+import           Data.Hashable
 import           Data.STRef
 import           Control.Monad.ST
 import           Pipes
@@ -462,6 +464,20 @@ numEdges DAWG{..} = do
 --     xs <- M.keys . stateMap <$> readSTRef dfa
 --     x  <- N.freeze =<< getState dfa root
 --     P.length $ mapM_ (N.edgeProd <=< lift.N.thaw) (x:xs)
+
+
+-- | Compute number of instances of individual hash values.
+hashFreq :: DAWG s -> ST s (M.Map Int Int)
+hashFreq DAWG{..} = do
+    mr <- newSTRef M.empty
+    DFAData{..} <- readSTRef dfa 
+    process mr =<< N.freeze =<< getState dfa root
+    H.mapM_ (process mr . fst) stateMap
+    readSTRef mr
+  where
+    process mr u = do
+        m <- readSTRef mr
+        writeSTRef mr $! M.insertWith' (+) (hash u) 1 m
 
 
 ----------------------------------------------------------------------

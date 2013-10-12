@@ -56,11 +56,14 @@ instance Arbitrary Input where
 -- | Property: a DAWG dictionary can be used like a map.
 contentProp :: Input -> Bool
 contentProp (Input xs) =
-    -- trace (show m ++ "\n===========\n" ++ show d) $
+--     trace (show m ++ "\n===========\n" ++ show d) $
+--     trace ("<< " ++ show df ++ " >>") $
     m == d
   where
     m = M.assocs (M.fromList xs)
     d = runST $ D.toList =<< D.fromList xs
+--     df = avg . M.elems $ runST $ D.hashFreq =<< D.fromList xs
+--     avg xs = fromIntegral (sum xs) / fromIntegral (length xs)
 
 
 -- | Property: there is one-to-one correspondence between DAWG states

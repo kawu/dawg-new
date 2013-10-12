@@ -2,6 +2,7 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE MagicHash #-}
 
 
 -- | Implementation of a transition map.
@@ -37,11 +38,19 @@ import           Control.Monad (forM_)
 import           Control.Monad.ST
 import           Pipes
 import           Data.Monoid (mconcat)
+import           Data.Hashable
 import           Data.Bits (shiftR)
 import           Data.STRef
 import qualified Data.Vector.Unboxed.Mutable as M
 import qualified Data.Vector.Unboxed as I
-import           Data.Hashable
+
+-- Just to get Hashable instance.
+import qualified Data.Vector.Unboxed.Base as IB
+import qualified Data.Vector.Primitive.Mutable as PM
+import qualified Data.Primitive.ByteArray as Prim
+import qualified Data.Primitive.Types as Prim
+import           GHC.Exts (Int(..))
+-- import qualified Foreign.Storable as F
 
 import           Data.DAWG.Dynamic.Types
 
@@ -219,10 +228,18 @@ data Trans' = Trans'
 -- TODO: Optimize implementation?
 instance Hashable Trans' where
     hashWithSalt s Trans'{..} = s
-        `hashWithSalt` hashIVec symv'
-        `hashWithSalt` hashIVec stiv'
-        where hashIVec = I.toList . I.slice 0 size'
+        `hashVec` symv'
+        `hashVec` stiv'
         -- `hashWithSalt` size'
+      where
+        -- hashIVec v = I.toList $ I.slice 0 size' v
+        hashVec s' v = runST $ do
+            IB.MV_Int (PM.MVector i n mba) <- I.unsafeThaw $ I.slice 0 size' v
+            Prim.ByteArray ba <- Prim.unsafeFreezeByteArray mba
+            let c = I# (Prim.sizeOf# (0 :: Sym))
+            return $ hashByteArrayWithSalt ba (i*c) (n*c) s'
+            -- return $ I.toList $ I.slice 0 size' v
+            
 
 
 instance Eq Trans' where
