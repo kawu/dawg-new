@@ -37,6 +37,7 @@ library
       -- , Data.DAWG.Dynamic.State.Trans
       , Data.DAWG.Dynamic.State.Trans.Map
       , Data.DAWG.Dynamic.State.Trans.Vect
+      , Data.DAWG.Dynamic.ByteState
       , Data.DAWG.Dynamic.Internal
       , Data.DAWG.Dynamic.Stack
       , Data.DAWG.Dynamic.Trie
